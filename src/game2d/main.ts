@@ -1,7 +1,7 @@
 // Lets PixiJS run on pages with a strict Content Security Policy (no eval).
 import 'pixi.js/unsafe-eval';
 import { Application } from 'pixi.js';
-import { Caste, DigDisposal, Item, Simulation, Stage, TICK_RATE, Task } from '../core';
+import { Caste, DigDisposal, HUNGRY, Item, Simulation, Stage, TICK_RATE, Task } from '../core';
 import { Controls } from './controls';
 import { Renderer } from './renderer';
 import { isTouchDevice, mountTouchControls } from './touch';
@@ -20,6 +20,8 @@ const CARRIED_NAMES: Record<Item, string> = {
   [Item.None]: 'rien',
   [Item.Soil]: 'une boulette de terre',
   [Item.Food]: 'de la nourriture',
+  [Item.Corpse]: 'une fourmi morte',
+  [Item.Brood]: 'du couvain',
 };
 
 async function start() {
@@ -118,14 +120,19 @@ async function start() {
     const depth = Math.max(0, sim.ants.y[p] - sim.world.surface[sim.ants.x[p]]);
     const castes = [0, 0, 0, 0];
     const tasks = [0, 0, 0, 0, 0];
+    const stages = [0, 0, 0];
+    let hungry = 0;
     for (let i = 0; i < sim.ants.count; i++) {
       if (!sim.ants.alive[i] || i === p) continue;
       castes[sim.ants.caste[i]]++;
-      tasks[sim.ants.task[i]]++;
+      if (sim.ants.caste[i] === Caste.Worker) tasks[sim.ants.task[i]]++;
+      if (sim.ants.energy[i] < HUNGRY) hungry++;
+      if (sim.ants.carrying[i] === Item.Brood) stages[sim.ants.broodStage[i]]++;
     }
-    const stages = [0, 0, 0];
     for (let i = 0; i < sim.brood.count; i++) stages[sim.brood.stage[i]]++;
+    const alates = castes[Caste.Queen] + castes[Caste.Male];
     const spiders = sim.enemies.living;
+    const s = sim.stats;
     const text = [
       sim.gameOver
         ? '<b class="alert">La reine est morte. Appuie sur N pour une nouvelle colonie.</b>'
@@ -134,11 +141,15 @@ async function start() {
           : spiders
             ? `${spiders} araignée${spiders > 1 ? 's' : ''} dans les environs`
             : '',
+      sim.flightActive() && alates ? '<b>Vol nuptial : les reines et les mâles ailés s\'envolent</b>' : '',
+      sim.colony.food === 0 && hungry ? `<b class="alert">La réserve est vide : ${hungry} fourmis ont faim</b>` : '',
       `<b>Réserve de nourriture : ${sim.colony.food}</b> · Porte : ${CARRIED_NAMES[sim.ants.carrying[p] as Item]}`,
       `Colonie : ${castes[Caste.Worker]} ouvrières · ${castes[Caste.Soldier]} soldats · ` +
-        `${castes[Caste.Queen]} reines · ${castes[Caste.Male]} mâles`,
-      `Au travail : ${tasks[Task.Forage]} fourragent · ${tasks[Task.Dig]} creusent · ` +
-        `${tasks[Task.Nurse]} soignent · ${tasks[Task.Guard]} gardent`,
+        `${castes[Caste.Queen]} reines ailées · ${castes[Caste.Male]} mâles`,
+      `Ouvrières : ${tasks[Task.Nurse]} nourrices · ${tasks[Task.Dig]} terrassières · ` +
+        `${tasks[Task.Forage]} fourrageuses`,
+      `Nid : ${sim.chambers.filter((c) => !sim.world.solidAt(Math.round(c.x), Math.round(c.y))).length}/${sim.chambers.length} chambres creusées` +
+        ` · Morts : ${s.antsLost} (${s.buried} au cimetière) · Envolés : ${s.flown}`,
       `Couvain : ${stages[Stage.Egg]} œufs · ${stages[Stage.Larva]} larves · ${stages[Stage.Pupa]} nymphes`,
       `Terre creusée : ${DISPOSAL_NAMES[sim.digDisposal]} · Profondeur : ${depth} · Graine : ${seed}`,
     ]

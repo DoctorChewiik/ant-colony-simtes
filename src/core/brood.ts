@@ -22,6 +22,8 @@ export class Brood {
   readonly caste: Uint8Array;
   readonly stage: Uint8Array;
   readonly age: Uint32Array;
+  /** Ticks a larva stays fed; a hungry larva stops growing until a nurse feeds it. */
+  readonly fed: Uint16Array;
 
   constructor(readonly capacity: number) {
     this.x = new Int32Array(capacity);
@@ -29,16 +31,18 @@ export class Brood {
     this.caste = new Uint8Array(capacity);
     this.stage = new Uint8Array(capacity);
     this.age = new Uint32Array(capacity);
+    this.fed = new Uint16Array(capacity);
   }
 
-  add(x: number, y: number, caste: Caste): number {
+  add(x: number, y: number, caste: Caste, stage = Stage.Egg, age = 0): number {
     if (this.count >= this.capacity) return -1;
     const id = this.count++;
     this.x[id] = x;
     this.y[id] = y;
     this.caste[id] = caste;
-    this.stage[id] = Stage.Egg;
-    this.age[id] = 0;
+    this.stage[id] = stage;
+    this.age[id] = age;
+    this.fed[id] = 0;
     return id;
   }
 
@@ -51,6 +55,7 @@ export class Brood {
     this.caste[id] = this.caste[last];
     this.stage[id] = this.stage[last];
     this.age[id] = this.age[last];
+    this.fed[id] = this.fed[last];
   }
 
   at(x: number, y: number): number {

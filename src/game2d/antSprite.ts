@@ -69,6 +69,13 @@ export function makeAntFrames(): Record<Caste, Texture[]> {
   return out;
 }
 
+/** A young queen before her nuptial flight still has her wings. */
+export function makeGyneFrames(): Texture[] {
+  const look = CASTE_LOOKS[Caste.Queen];
+  const colors = { ...look.colors, w: '#d8e2ea' };
+  return LEGS.map((legs) => frameTexture([WINGS, ...BODY, legs], colors));
+}
+
 /** Spider sprite: 3 cells wide, 1.5 cells tall, facing right. */
 export const SPIDER_W = 15;
 export const SPIDER_H = 8;

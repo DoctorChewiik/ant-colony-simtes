@@ -1,6 +1,14 @@
 import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js';
 import { CASTES, Caste, ENEMIES, EnemyKind, Item, MATERIALS, Stage, TICK_RATE, hash2, type Simulation } from '../core';
-import { ANT_H, ANT_W, CASTE_LOOKS, SPIDER_H, SPIDER_W, makeAntFrames, makeSpiderFrames } from './antSprite';
+import { ANT_H, ANT_W, CASTE_LOOKS, SPIDER_H, SPIDER_W, makeAntFrames, makeGyneFrames, makeSpiderFrames } from './antSprite';
+
+const PELLET_COLORS: Record<Item, number> = {
+  [Item.None]: 0,
+  [Item.Soil]: 0x8c6440,
+  [Item.Food]: 0xd6aa48,
+  [Item.Corpse]: 0x2e1d15,
+  [Item.Brood]: 0xf4f0e2,
+};
 import { cellColor } from './palette';
 
 const MIN_ZOOM = 2;
@@ -46,6 +54,7 @@ export class Renderer {
   private scentTexture: Texture;
   private scentSprite: Sprite;
   private antFrames: Record<Caste, Texture[]>;
+  private gyneFrames: Texture[];
   private spiderFrames: Texture[];
   private antLayer = new Container();
   private enemyLayer = new Container();
@@ -87,6 +96,7 @@ export class Renderer {
     this.scentSprite.visible = false;
 
     this.antFrames = makeAntFrames();
+    this.gyneFrames = makeGyneFrames();
     this.spiderFrames = makeSpiderFrames();
 
     this.camera.addChild(
@@ -235,7 +245,8 @@ export class Renderer {
     const ticks = CASTES[caste].stepTicks + (ants.carrying[id] ? 1 : 0);
     this.glide(view, ants.x[id], ants.y[id], ants.gen[id], ((ticks + 1) * 1000) / TICK_RATE);
 
-    const frames = this.antFrames[caste];
+    // Young queens still have their wings; the player's founding queen has shed hers.
+    const frames = caste === Caste.Queen && id !== this.sim.player ? this.gyneFrames : this.antFrames[caste];
     view.sprite.texture = frames[(ants.steps[id] >> 1) % frames.length];
     this.orientAnt(id, view, CASTE_LOOKS[caste].scale);
 
@@ -253,9 +264,12 @@ export class Renderer {
       view.carried = carried;
       view.pellet.clear();
       if (carried !== Item.None) {
-        view.pellet
-          .rect(ANT_W / 2 - 0.5, -ANT_H / 2 + 1.5, 3, 3)
-          .fill(carried === Item.Food ? 0xd6aa48 : 0x8c6440);
+        const color = PELLET_COLORS[carried];
+        if (carried === Item.Brood || carried === Item.Corpse) {
+          view.pellet.ellipse(ANT_W / 2 + 0.5, -ANT_H / 2 + 3, 2.2, 1.4).fill(color);
+        } else {
+          view.pellet.rect(ANT_W / 2 - 0.5, -ANT_H / 2 + 1.5, 3, 3).fill(color);
+        }
       }
     }
 

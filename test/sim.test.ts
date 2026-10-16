@@ -292,21 +292,120 @@ describe('colony life', () => {
     expect(sim.colony.food).toBeGreaterThan(before);
   });
 
-  it('diggers enlarge the nest around its heart', () => {
+  it('diggers dig the planned chambers and nothing else', () => {
     const sim = colony();
+    const openBefore = sim.world.cells.map((c) => (c === Material.Air ? 1 : 0));
     const dugBefore = sim.stats.dug;
     addAnts(sim, 6, Caste.Worker, Task.Dig);
     run(sim, IDLE, 2400);
     expect(sim.stats.dug - dugBefore).toBeGreaterThan(15);
-    // Everything they opened is underground, within the nest radius.
-    const { nestX, nestY } = sim.colony;
-    const radius = sim.nestRadius() + 1;
     for (let y = 0; y < sim.world.height; y++) {
       for (let x = 0; x < sim.world.width; x++) {
         if (sim.world.get(x, y) !== Material.Air || y <= sim.world.surface[x]) continue;
-        expect(Math.hypot(x - nestX, y - nestY)).toBeLessThanOrEqual(radius + 1);
+        if (openBefore[sim.world.index(x, y)]) continue;
+        expect(sim.inPlan(x, y)).toBe(true);
       }
     }
+  });
+
+  it('diggers carry the soil out and pile it in a mound beside the entrance', () => {
+    const sim = colony();
+    sim.digDisposal = DigDisposal.Surface;
+    const heightBefore = [...sim.world.surface].map((_, x) => sim.topSolid(x));
+    addAnts(sim, 6, Caste.Worker, Task.Dig);
+    run(sim, IDLE, 3000);
+    let raised = 0;
+    for (let x = 0; x < sim.world.width; x++) {
+      for (let y = sim.topSolid(x); y < heightBefore[x]; y++) {
+        if (sim.world.get(x, y) !== Material.Loose) continue;
+        raised++;
+        expect(Math.abs(x - sim.entranceX)).toBeLessThan(30);
+      }
+    }
+    expect(raised).toBeGreaterThan(0);
+    // The entrance stays open.
+    expect(sim.exitDist[sim.idx(sim.colony.nestX, sim.colony.nestY)]).toBeLessThan(1000);
+  });
+
+  it('nurses feed the larvae, which only grow when fed', () => {
+    const sim = colony();
+    run(sim, IDLE, STAGE_TICKS[Stage.Egg] + 5);
+    expect(sim.brood.stage[0]).toBe(Stage.Larva);
+    // With a worker around, nobody feeding means the larva stops growing.
+    const lazy = addAnts(sim, 1, Caste.Worker, Task.Forage)[0];
+    sim.ants.x[lazy] = 5;
+    const age = sim.brood.age[0];
+    sim.brood.fed[0] = 0;
+    for (let t = 0; t < 30; t++) {
+      sim.brood.fed[0] = 0;
+      sim.step(IDLE);
+    }
+    expect(sim.brood.age[0]).toBe(age);
+    addAnts(sim, 3, Caste.Worker, Task.Nurse);
+    run(sim, IDLE, 600);
+    expect(sim.stats.larvaeFed).toBeGreaterThan(0);
+  });
+
+  it('nurses carry the brood into the nursery', () => {
+    const sim = colony();
+    addAnts(sim, 8, Caste.Worker, Task.Dig);
+    run(sim, IDLE, 4000);
+    expect(Math.hypot(sim.nurseryX - sim.colony.nestX, sim.nurseryY - sim.colony.nestY)).toBeGreaterThan(3);
+    // The queen lays at the nest heart; nurses take the eggs to the nursery.
+    for (let i = 1; i < sim.ants.count; i++) sim.ants.task[i] = Task.Nurse;
+    sim.step(input({ lay: Caste.Worker }));
+    expect(sim.brood.count).toBeGreaterThan(0);
+    run(sim, IDLE, 600);
+    expect(sim.brood.count).toBeGreaterThan(0);
+    for (let i = 0; i < sim.brood.count; i++) {
+      expect(sim.nurseryDist[sim.idx(sim.brood.x[i], sim.brood.y[i])]).toBeLessThanOrEqual(9);
+    }
+  });
+
+  it('dead ants are carried out of the nest to a refuse pile', () => {
+    const sim = colony();
+    const { nestX, nestY } = sim.colony;
+    addAnts(sim, 4, Caste.Worker, Task.Nurse);
+    sim.world.set(nestX + 1, nestY, Material.Corpse);
+    run(sim, IDLE, 3000);
+    // The body was carried out and left far from the nest (spiders may have killed others since).
+    expect(sim.stats.buried).toBeGreaterThanOrEqual(1);
+  });
+
+  it('hungry ants eat from the reserve, and starve when it is empty', () => {
+    const sim = colony();
+    const [ant] = addAnts(sim, 1, Caste.Worker, Task.Nurse);
+    sim.ants.energy[ant] = 10;
+    const food = sim.colony.food;
+    run(sim, IDLE, 40);
+    expect(sim.stats.meals).toBe(1);
+    expect(sim.colony.food).toBe(food - 1);
+    sim.colony.food = 0;
+    sim.ants.energy[ant] = 0;
+    run(sim, IDLE, 90 * 12);
+    expect(sim.ants.alive[ant]).toBe(0);
+    expect(sim.stats.starved).toBe(1);
+  });
+
+  it('young workers mostly nurse and old ones mostly forage', () => {
+    const sim = colony();
+    sim.colony.food = 1000;
+    const count = (age: number, task: Task) =>
+      Array.from({ length: 400 }, () => sim.pickTask(Caste.Worker, age)).filter((t) => t === task).length;
+    expect(count(0, Task.Nurse)).toBeGreaterThan(count(0, Task.Forage));
+    expect(count(30 * 600, Task.Forage)).toBeGreaterThan(count(30 * 600, Task.Nurse));
+  });
+
+  it('winged queens and males leave on a nuptial flight', () => {
+    const sim = colony();
+    addAnts(sim, 9, Caste.Worker, Task.Nurse);
+    const alates = addAnts(sim, 2, Caste.Male).concat(addAnts(sim, 1, Caste.Queen));
+    sim.colony.food = 1000;
+    for (let t = 0; t < 30 * 200 && !sim.flightActive(); t++) sim.step(IDLE);
+    expect(sim.flightActive()).toBe(true);
+    for (let t = 0; t < 900; t++) sim.step(IDLE);
+    for (const id of alates) expect(sim.ants.alive[id]).toBe(0);
+    expect(sim.stats.flown).toBe(3);
   });
 
   it('ants raise the alarm and gang up to kill a spider', () => {

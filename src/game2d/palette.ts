@@ -35,6 +35,10 @@ const SHADES: Record<Material, Rgb[]> = {
     [196, 150, 60],
     [230, 190, 90],
   ],
+  [Material.Corpse]: [
+    [52, 34, 26],
+    [44, 28, 22],
+  ],
 };
 
 const SKY_TOP: Rgb = [120, 178, 222];

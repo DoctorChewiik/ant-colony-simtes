@@ -3,6 +3,10 @@ export enum Item {
   None = 0,
   Soil = 1,
   Food = 2,
+  /** A dead nestmate, carried out to the refuse pile. */
+  Corpse = 3,
+  /** An egg, larva or pupa a nurse is moving. */
+  Brood = 4,
 }
 
 /** What an ant is born as. */
@@ -22,6 +26,11 @@ export enum Task {
   Guard = 4,
 }
 
+/** A full ant can work this many ticks (two minutes) before it needs to eat. */
+export const ENERGY_MAX = 3600;
+/** Below this an ant stops work and goes home to eat. */
+export const HUNGRY = 1200;
+
 export interface CasteInfo {
   name: string;
   /** Food the queen spends to lay one egg of this caste. */
@@ -31,13 +40,15 @@ export interface CasteInfo {
   maxHp: number;
   /** Damage per bite. */
   bite: number;
+  /** Ticks an AI ant of this caste lives before dying of old age. */
+  lifespan: number;
 }
 
 export const CASTES: Record<Caste, CasteInfo> = {
-  [Caste.Worker]: { name: 'ouvrière', eggCost: 1, stepTicks: 2, maxHp: 10, bite: 1 },
-  [Caste.Soldier]: { name: 'soldat', eggCost: 2, stepTicks: 3, maxHp: 30, bite: 4 },
-  [Caste.Queen]: { name: 'reine', eggCost: 4, stepTicks: 3, maxHp: 40, bite: 2 },
-  [Caste.Male]: { name: 'mâle', eggCost: 2, stepTicks: 2, maxHp: 6, bite: 0 },
+  [Caste.Worker]: { name: 'ouvrière', eggCost: 1, stepTicks: 2, maxHp: 10, bite: 1, lifespan: 30 * 60 * 20 },
+  [Caste.Soldier]: { name: 'soldat', eggCost: 2, stepTicks: 3, maxHp: 30, bite: 4, lifespan: 30 * 60 * 25 },
+  [Caste.Queen]: { name: 'reine', eggCost: 4, stepTicks: 3, maxHp: 40, bite: 2, lifespan: 30 * 60 * 30 },
+  [Caste.Male]: { name: 'mâle', eggCost: 2, stepTicks: 2, maxHp: 6, bite: 0, lifespan: 30 * 60 * 30 },
 };
 
 /**
@@ -71,6 +82,19 @@ export class Ants {
   readonly trip: Uint16Array;
   /** Steps taken, for the walk animation. */
   readonly steps: Uint32Array;
+  /** Tick the ant hatched; workers change jobs as they age. */
+  readonly born: Int32Array;
+  /** Ticks of activity left before the ant is hungry and must eat. */
+  readonly energy: Uint16Array;
+  /** Last place this forager found food, or -1: it goes back there. */
+  readonly memX: Int32Array;
+  readonly memY: Int32Array;
+  /** The egg, larva or pupa a nurse carries. */
+  readonly broodCaste: Uint8Array;
+  readonly broodStage: Uint8Array;
+  readonly broodAge: Uint16Array;
+  /** 1 while a winged queen or male is flying off on its nuptial flight. */
+  readonly flying: Uint8Array;
 
   constructor(readonly capacity: number) {
     this.alive = new Uint8Array(capacity);
@@ -90,6 +114,14 @@ export class Ants {
     this.task = new Uint8Array(capacity);
     this.trip = new Uint16Array(capacity);
     this.steps = new Uint32Array(capacity);
+    this.born = new Int32Array(capacity);
+    this.energy = new Uint16Array(capacity);
+    this.memX = new Int32Array(capacity);
+    this.memY = new Int32Array(capacity);
+    this.broodCaste = new Uint8Array(capacity);
+    this.broodStage = new Uint8Array(capacity);
+    this.broodAge = new Uint16Array(capacity);
+    this.flying = new Uint8Array(capacity);
   }
 
   /** Number of living ants. */
@@ -122,6 +154,10 @@ export class Ants {
     this.task[id] = Task.Idle;
     this.trip[id] = 0;
     this.steps[id] = 0;
+    this.energy[id] = ENERGY_MAX;
+    this.memX[id] = -1;
+    this.memY[id] = -1;
+    this.flying[id] = 0;
     return id;
   }
 }
