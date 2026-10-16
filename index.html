@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Fourmilière</title>
+    <link rel="stylesheet" href="/src/game2d/style.css" />
+  </head>
+  <body>
+    <div id="game"></div>
+    <div id="hud">
+      <div class="card" id="colony">
+        <div class="card-head"><span class="label">Colonie</span><span id="when"></span></div>
+        <div id="headline"></div>
+        <div id="alerts"></div>
+      </div>
+      <div class="toolbar" id="toolbar"></div>
+      <div class="panel" id="details" hidden></div>
+      <div class="panel" id="neuro" hidden>
+        <div class="neuro-head"><b id="neuro-title">Fourmi neuro</b><button type="button" class="close" id="neuro-close" aria-label="Fermer">×</button></div>
+        <div id="neuro-doing"></div>
+        <canvas id="neuro-canvas"></canvas>
+      </div>
+      <div class="panel" id="tools" hidden>
+        <h1>Outils</h1>
+        <div class="tool-row" id="tool-list"></div>
+        <div class="tool-row"><span>Taille</span><span id="size-list"></span></div>
+        <div class="tool-row" id="tool-actions"></div>
+        <p class="hint">Choisis l'eau, puis appuie ou glisse là où tu veux la verser. Deux doigts pour bouger la vue.</p>
+      </div>
+      <div class="panel" id="help" hidden>
+        <h1>Fourmilière</h1>
+        <p>La reine fonde sa colonie toute seule : elle creuse jusqu'à sa chambre et pond. Les ouvrières soignent le couvain, creusent le nid, fourragent et défendent la colonie.</p>
+        <p>Glisser ou <kbd>ZQSD</kbd> / flèches : déplacer la vue · molette ou deux doigts : zoom · <kbd>R</kbd> : recadrer</p>
+        <p><kbd>C</kbd> ou « Reine » : prendre la reine en main (et la rendre)</p>
+        <p class="indent">Avec la reine : <kbd>ZQSD</kbd> se déplacer, <kbd>Espace</kbd> ou clic creuser, <kbd>E</kbd> déposer, <kbd>F</kbd> manger, <kbd>1</kbd>–<kbd>4</kbd> pondre (ouvrière, soldat, reine, mâle), <kbd>T</kbd> terre creusée</p>
+        <p>☰ ou <kbd>B</kbd> : outils (main, eau, 🧠 fourmi neuro : dès la première ouvrière, une fourmi est pilotée par le contrôleur neuromécanique (CPG trépied, antennes, chimiotaxie, d'après NeuroMechFly / flygym) ; elle n'avance que quand ses pattes se posent. Touche une autre fourmi pour lui donner ce cerveau. 🌰 nourriture : touche ou glisse pour en déposer. 🟣 piste guide : trace une phéromone au doigt ou à la souris, en partant près de la fourmi cerveau ; elle la suit jusqu'au bout et y attend. Toutes les fourrageuses ont ce cerveau et partagent ce qu'elles apprennent : où trouver à manger et comment régler leurs antennes (bouton 🧠 Cerveau du menu pour revenir à une seule fourmi))</p>
+        <p><kbd>X</kbd> : vitesse · <kbd>P</kbd> : pause · <kbd>V</kbd> : phéromones · <kbd>I</kbd> : détails · <kbd>N</kbd> : nouveau monde · <kbd>H</kbd> : aide</p>
+      </div>
+      <div id="paused" hidden>PAUSE</div>
+    </div>
+    <script type="module" src="/src/game2d/main.ts"></script>
+  </body>
+</html>

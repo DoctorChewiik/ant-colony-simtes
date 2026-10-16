@@ -1,0 +1,414 @@
+:root {
+  --panel-bg: rgba(20, 14, 10, 0.78);
+  --panel-text: #f3e9dc;
+  --accent: #e8b04a;
+  --card-bg: rgba(242, 232, 210, 0.94);
+  --card-ink: #3a2a1c;
+  --card-edge: #6b5038;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #1a120c;
+  font-family: ui-monospace, 'Cascadia Mono', Menlo, Consolas, monospace;
+  color: var(--panel-text);
+}
+
+#game {
+  position: fixed;
+  inset: 0;
+}
+
+#game canvas {
+  display: block;
+  image-rendering: pixelated;
+}
+
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+.panel {
+  position: absolute;
+  left: 12px;
+  background: var(--panel-bg);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 460px;
+}
+
+#help {
+  top: 96px;
+  max-width: 520px;
+}
+
+#details {
+  top: 96px;
+}
+
+#tools {
+  top: calc(58px + env(safe-area-inset-top, 0px));
+  left: auto;
+  right: calc(10px + env(safe-area-inset-right, 0px));
+  pointer-events: auto;
+  width: 260px;
+}
+
+#tools h1 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.tool-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.tool-row span {
+  display: flex;
+  gap: 6px;
+}
+
+#tools .hint {
+  margin: 0;
+  opacity: 0.8;
+}
+
+#neuro {
+  top: auto;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  pointer-events: auto;
+  background: rgba(20, 14, 10, 0.94);
+  width: min(520px, calc(100vw - 20px));
+  padding: 6px 10px 8px;
+}
+
+.neuro-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--accent);
+}
+
+#neuro .close {
+  font: inherit;
+  font-size: 16px;
+  background: none;
+  border: 0;
+  color: var(--panel-text);
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+#neuro-doing {
+  opacity: 0.85;
+}
+
+#neuro-canvas {
+  display: block;
+  width: 100%;
+  height: 220px;
+  margin-top: 4px;
+}
+
+#help[hidden],
+#neuro[hidden],
+#tools[hidden],
+#details[hidden],
+#alerts[hidden] {
+  display: none;
+}
+
+.indent {
+  padding-left: 12px;
+  opacity: 0.85;
+}
+
+/* The colony card, top left, like a field notebook label. */
+.card {
+  position: absolute;
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  left: calc(10px + env(safe-area-inset-left, 0px));
+  background: var(--card-bg);
+  color: var(--card-ink);
+  border: 2px solid var(--card-edge);
+  border-radius: 6px;
+  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.35);
+  padding: 6px 12px 8px;
+  max-width: min(460px, calc(100vw - 20px));
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.card .label {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: bold;
+}
+
+#headline {
+  font-size: 17px;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+}
+
+#alerts {
+  font-size: 12px;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.card .alert {
+  color: #a8321f;
+}
+
+.toolbar {
+  position: absolute;
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  right: calc(10px + env(safe-area-inset-right, 0px));
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 50vw;
+  pointer-events: auto;
+}
+
+.tool {
+  font: inherit;
+  font-size: 13px;
+  font-weight: bold;
+  color: var(--card-ink);
+  background: var(--card-bg);
+  border: 2px solid var(--card-edge);
+  border-radius: 6px;
+  min-width: 40px;
+  min-height: 36px;
+  padding: 4px 10px;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  touch-action: none;
+  white-space: nowrap;
+}
+
+.tool.on {
+  background: var(--accent);
+}
+
+#help h1 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  color: var(--accent);
+}
+
+#help p {
+  margin: 0;
+}
+
+
+kbd {
+  border: 1px solid rgba(243, 233, 220, 0.4);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-family: inherit;
+}
+
+#paused {
+  position: absolute;
+  top: 40%;
+  width: 100%;
+  text-align: center;
+  font-size: 32px;
+  letter-spacing: 8px;
+  color: var(--accent);
+  text-shadow: 0 2px 0 #000;
+}
+
+/* The game canvas handles its own touch gestures (pinch zoom, dig). */
+#game canvas {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.touch-only {
+  display: none;
+}
+
+body.touch .touch-only {
+  display: block;
+}
+
+/* Phones: smaller card and panels, toolbar wraps under it. */
+body.touch .panel {
+  font-size: 11px;
+  left: calc(8px + env(safe-area-inset-left, 0px));
+  right: calc(8px + env(safe-area-inset-right, 0px));
+  max-width: none;
+  top: calc(150px + env(safe-area-inset-top, 0px));
+}
+
+@media (max-width: 640px) {
+  #headline {
+    font-size: 14px;
+  }
+
+  .card {
+    right: calc(10px + env(safe-area-inset-right, 0px));
+  }
+
+  .toolbar {
+    top: auto;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    left: calc(10px + env(safe-area-inset-left, 0px));
+    max-width: none;
+    justify-content: center;
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+
+  .toolbar .tool {
+    font-size: 12px;
+    min-width: 0;
+    padding: 6px 7px;
+  }
+
+  #neuro {
+    top: auto;
+    bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+    width: auto;
+  }
+
+  #neuro-canvas {
+    height: 200px;
+  }
+
+  #tools {
+    top: auto;
+    width: auto;
+    bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  }
+
+  body.controlling .toolbar {
+    bottom: auto;
+    top: calc(118px + env(safe-area-inset-top, 0px));
+  }
+}
+
+/* The joystick and action buttons only show while the player controls the queen. */
+body:not(.controlling) .joystick,
+body:not(.controlling) .actions,
+body:not(.controlling) .lay-menu {
+  display: none !important;
+}
+
+#touch {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+#touch > * {
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.joystick {
+  position: absolute;
+  left: calc(20px + env(safe-area-inset-left, 0px));
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  background: rgba(20, 14, 10, 0.45);
+  border: 2px solid rgba(243, 233, 220, 0.35);
+  display: grid;
+  place-items: center;
+}
+
+.knob {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(243, 233, 220, 0.75);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.4);
+}
+
+.actions {
+  position: absolute;
+  right: calc(16px + env(safe-area-inset-right, 0px));
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 8px;
+  justify-items: stretch;
+}
+
+.touch-btn {
+  font: inherit;
+  font-size: 13px;
+  color: var(--panel-text);
+  background: rgba(20, 14, 10, 0.72);
+  border: 2px solid rgba(243, 233, 220, 0.35);
+  border-radius: 10px;
+  min-width: 76px;
+  min-height: 44px;
+  padding: 6px 10px;
+}
+
+.touch-btn:active,
+.touch-btn.held {
+  background: rgba(232, 176, 74, 0.85);
+  color: #1a120c;
+}
+
+.touch-btn.big {
+  grid-column: span 2;
+  min-height: 64px;
+  font-size: 16px;
+  font-weight: bold;
+  border-color: var(--accent);
+}
+
+.lay-menu {
+  position: absolute;
+  right: calc(16px + env(safe-area-inset-right, 0px));
+  bottom: calc(220px + env(safe-area-inset-bottom, 0px));
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 8px;
+}
+
+.lay-menu[hidden] {
+  display: none;
+}
+
+.panel .alert {
+  color: #ff8a6a;
+}
