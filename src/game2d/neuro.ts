@@ -145,10 +145,10 @@ export class NeuroAnt {
     else if (a.carrying[id] === Item.Brood) doing = 'porte du couvain';
     else if (a.carrying[id] === Item.Corpse) doing = 'emporte une fourmi morte';
     else doing = GOALS[this.brain!.goal];
-    const b = this.brain!;
+    const b = this.brain!.mind;
     const places = b.memory.length;
     const learned =
-      `Appris : ${places} lieu${places > 1 ? 'x' : ''} de nourriture en mémoire, gain des antennes ${b.turnGain.toFixed(1)}` +
+      `Appris par la colonie : ${places} lieu${places > 1 ? 'x' : ''} de nourriture en mémoire, gain des antennes ${b.turnGain.toFixed(1)}` +
       (b.trips ? `, ${b.trips} trajet${b.trips > 1 ? 's' : ''} (efficacité ${Math.round(b.efficiency * 100)} %)` : '');
     return { title: `${CASTE_NAMES[caste]}${job} n°${id}`, doing, learned };
   }

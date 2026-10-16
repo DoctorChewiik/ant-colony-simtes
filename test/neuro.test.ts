@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Caste, CpgNetwork, IDLE, Item, Material, Simulation } from '../src/core';
+import { Caste, CpgNetwork, IDLE, Item, Material, Simulation, thinkQueen } from '../src/core';
 
 const opts = { seed: 42, width: 160, height: 80 };
 
@@ -136,10 +136,26 @@ describe('neuro learning and the food tool', () => {
       carrying = c;
       if (!sim.neuro.valid(sim)) break;
     }
-    expect(n.memory.length).toBeGreaterThan(0);
-    expect(Math.abs(n.memory[0].x - fx)).toBeLessThanOrEqual(5);
+    expect(n.mind.memory.length).toBeGreaterThan(0);
+    expect(Math.abs(n.mind.memory[0].x - fx)).toBeLessThanOrEqual(5);
     expect(tripsTo.length).toBe(3);
     // Later trips, guided by memory, are no slower than the first search.
     expect(Math.min(tripsTo[1], tripsTo[2])).toBeLessThan(tripsTo[0]);
   });
+});
+
+describe('colony brain', () => {
+  it('gives every forager a neuro brain sharing one mind, and can be switched off', () => {
+    const sim = new Simulation({ seed: 99, width: 400, height: 260 });
+    for (let t = 0; t < 30 * 60 * 8; t++) sim.step(thinkQueen(sim));
+    const foragers = [...Array(sim.ants.count).keys()].filter((i) => sim.ants.alive[i] && sim.ants.caste[i] === Caste.Worker && sim.ants.task[i] === 1);
+    expect(foragers.length).toBeGreaterThan(1);
+    expect(sim.neuroAnts()).toBeGreaterThanOrEqual(foragers.length);
+    for (const [, b] of sim.brains) expect(b.mind).toBe(sim.mind);
+    expect(sim.mind.trips).toBeGreaterThan(0);
+    sim.colonyBrain = false;
+    sim.step(IDLE);
+    sim.step(IDLE);
+    expect(sim.neuroAnts()).toBe(1);
+  }, 60_000);
 });

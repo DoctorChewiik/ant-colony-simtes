@@ -1,5 +1,5 @@
 import { UNREACHABLE, thinkAnt } from './ai';
-import { NeuroBrain } from './neuro';
+import { NeuroBrain, NeuroMind } from './neuro';
 import { Ants, CASTES, Caste, ENERGY_MAX, HUNGRY, Item, JOBS, SPECIALIST, Task } from './ants';
 import { Brood, STAGE_TICKS, Stage } from './brood';
 import { ENEMIES, Enemies, EnemyKind } from './enemies';
@@ -182,7 +182,12 @@ export class Simulation {
   readonly brood = new Brood(1024);
   readonly enemies = new Enemies(32);
   /** The one ant whose legs and brain run the neuromechanical controller (see neuro.ts). */
-  readonly neuro = new NeuroBrain();
+  /** What the colony's neuro brains have learned, shared by all of them. */
+  readonly mind = new NeuroMind();
+  readonly neuro = new NeuroBrain(this.mind);
+  /** Every forager runs the neuro controller too, with its own legs and the shared mind. */
+  colonyBrain = true;
+  readonly brains = new Map<number, NeuroBrain>();
   readonly player: number;
   readonly stats: SimStats = {
     dug: 0,
@@ -300,9 +305,10 @@ export class Simulation {
   step(playerInput: AntInput): void {
     if (!this.gameOver) this.updateAnt(this.player, playerInput);
     this.neuro.ensure(this);
+    if (this.tick % 300 === 0) for (const [id, b] of this.brains) if (!b.valid(this)) this.brains.delete(id);
     for (let id = 0; id < this.ants.count; id++) {
       if (id === this.player || !this.ants.alive[id]) continue;
-      this.updateAnt(id, id === this.neuro.id ? this.neuro.think(this, id) : thinkAnt(this, id));
+      this.updateAnt(id, this.controller(id));
     }
     this.updateEnemies();
     this.updateBrood();
@@ -355,6 +361,31 @@ export class Simulation {
   /** Open cell something can cling to, ignoring who stands there. */
   walkable(x: number, y: number): boolean {
     return this.world.inBounds(x, y) && !this.world.solidAt(x, y) && this.hasGrip(x, y);
+  }
+
+  /** The input for an AI ant: the neuro brain for the brain ant and (with `colonyBrain`) every forager. */
+  private controller(id: number): AntInput {
+    if (id === this.neuro.id) return this.neuro.think(this, id);
+    const a = this.ants;
+    if (this.colonyBrain && a.caste[id] === Caste.Worker && a.task[id] === Task.Forage) {
+      let brain = this.brains.get(id);
+      if (!brain || !brain.valid(this)) {
+        brain = new NeuroBrain(this.mind, false);
+        brain.attach(this, id);
+        this.brains.set(id, brain);
+      }
+      return brain.think(this, id);
+    }
+    if (this.brains.size) this.brains.delete(id);
+    return thinkAnt(this, id);
+  }
+
+  /** Ants running the neuro controller right now. */
+  neuroAnts(): number {
+    let n = this.neuro.valid(this) ? 1 : 0;
+    if (!this.colonyBrain) return n;
+    for (const [id, b] of this.brains) if (b.valid(this) && id !== this.neuro.id && this.ants.task[id] === Task.Forage) n++;
+    return n;
   }
 
   /** Strength of the guide pheromone in a cell, from 0 to 1. */

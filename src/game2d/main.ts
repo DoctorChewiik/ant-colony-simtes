@@ -140,6 +140,7 @@ async function start() {
     const disposal = sim.digDisposal;
     sim = new Simulation({ seed, ...WORLD });
     sim.digDisposal = disposal;
+    sim.colonyBrain = brainButton.classList.contains('on');
     renderer = new Renderer(app, sim);
     neuroShown = false;
     setControlling(false);
@@ -227,9 +228,17 @@ async function start() {
     brushButtons.push(b);
     sizeList.append(b);
   });
+  const brainLabel = () => (sim.colonyBrain ? '🧠 Cerveau : toute la colonie' : '🧠 Cerveau : une fourmi');
+  const brainButton = makeButton(brainLabel(), 'Donner le cerveau neuro à toutes les fourrageuses, ou à une seule fourmi', () => {
+    sim.colonyBrain = !sim.colonyBrain;
+    brainButton.textContent = brainLabel();
+    brainButton.classList.toggle('on', sim.colonyBrain);
+  });
+  brainButton.classList.toggle('on', true);
   document.getElementById('tool-actions')!.append(
     makeButton("Vider l'eau", "Retirer toute l'eau", () => sim.water.clear()),
     makeButton('Effacer la piste', 'Retirer la phéromone guide', () => sim.clearGuide()),
+    brainButton,
   );
 
   const menuButton = makeButton('☰', 'Outils : main, eau, nourriture, fourmi cerveau', toggleMenu);
@@ -383,6 +392,12 @@ async function start() {
     updateHud();
   });
 
+  function brainLine(): string {
+    if (!sim.colonyBrain) return 'Cerveau neuro : une seule fourmi';
+    const m = sim.mind;
+    return `Cerveau de colonie : ${sim.neuroAnts()} fourmis neuro · ${m.memory.length} lieux de nourriture appris · gain des antennes ${m.turnGain.toFixed(1)} · ${m.trips} trajets`;
+  }
+
   function specialistLine(): string {
     const sp = sim.specialists();
     return `Spécialistes : ${sp.forage} fourrageuses · ${sp.dig} terrassières · ${sp.nurse} nourrices · ${sp.generalist} polyvalentes`;
@@ -435,6 +450,7 @@ async function start() {
           `${castes[Caste.Worker]} ouvrières · ${castes[Caste.Soldier]} soldats · ${castes[Caste.Queen]} reines ailées · ${castes[Caste.Male]} mâles`,
           `Ouvrières : ${tasks[Task.Nurse]} nourrices · ${tasks[Task.Dig]} terrassières · ${tasks[Task.Forage]} fourrageuses`,
           specialistLine(),
+          brainLine(),
           `Couvain : ${stages[Stage.Egg]} œufs · ${stages[Stage.Larva]} larves · ${stages[Stage.Pupa]} nymphes`,
           `Nid : ${sim.chambers.filter((c) => sim.chamberFloor(c) >= 0).length}/${sim.chambers.length} chambres · ${sim.plan.filter((n) => n.room).length} prévues au total`,
           `Morts : ${s.antsLost} (${s.buried} au cimetière, ${s.starved} de faim, ${s.diedOfAge} de vieillesse, ${s.drowned} noyées, ${s.fell} de chute) · Envolés : ${s.flown}`,

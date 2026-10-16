@@ -20,6 +20,9 @@ import { TICK_RATE, type Simulation } from './sim';
  */
 
 const TAU = Math.PI * 2;
+const DIRS: ReadonlyArray<readonly [number, number]> = [
+  [-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1],
+];
 /** Tripod gait: legs 0, 2, 4 in phase, anti-phase to 1, 3, 5. As flygym's tripod phase biases. */
 const PHASE_BIAS = [
   [0, 1, 0, 1, 0, 1],
@@ -104,8 +107,78 @@ export class CpgNetwork {
 export type NeuroGoal = 'guide' | 'food' | 'memory' | 'home' | 'air' | 'explore' | 'rest' | 'reflex';
 
 /** The brain and legs of the one ant that runs the neuromechanical controller. */
+/**
+ * What the colony's brains learn, shared by every ant that runs the controller
+ * (as foragers share what they find through trails and recruitment):
+ *  - where food was found (spatial memory, as foragers learn their feeding
+ *    sites), each place weighted by how often it paid off;
+ *  - how hard to turn on a smell difference (the antennal gain), tuned trip
+ *    after trip by trial and error: a change that made the last trip to food
+ *    straighter is kept, one that made it worse is undone.
+ */
+export class NeuroMind {
+  memory: Array<{ x: number; y: number; weight: number }> = [];
+  turnGain = NEURO.turnGain;
+  private gainStep = 0.5;
+  /** Trips to food completed, and how straight they were on average (1 = a beeline). */
+  trips = 0;
+  efficiency = 0;
+
+  /** Food found at (fx, fy): remember the place and grade the trip that led there. */
+  learn(fx: number, fy: number, trip: { x: number; y: number; taken: number } | null): void {
+    const near = this.memory.find((m) => Math.abs(m.x - fx) <= 5 && Math.abs(m.y - fy) <= 5);
+    if (near) {
+      near.weight = Math.min(20, near.weight + 1);
+      near.x = fx;
+      near.y = fy;
+    } else {
+      this.memory.push({ x: fx, y: fy, weight: 1 });
+      this.memory.sort((p, q) => q.weight - p.weight);
+      this.memory.length = Math.min(this.memory.length, NEURO.memorySlots);
+    }
+    if (!trip) return;
+    const direct = Math.max(Math.abs(fx - trip.x), Math.abs(fy - trip.y)) - 1;
+    if (direct < 3 || trip.taken < 1) return;
+    const eff = Math.min(1, direct / trip.taken);
+    // Trial and error on the antennal gain: worse than usual, step back the other way, smaller.
+    if (this.trips > 0 && eff < this.efficiency) this.gainStep *= -0.6;
+    if (Math.abs(this.gainStep) < 0.1) this.gainStep = 0.1 * Math.sign(this.gainStep || 1);
+    this.efficiency = this.trips > 0 ? this.efficiency * 0.9 + eff * 0.1 : eff;
+    this.trips++;
+    this.turnGain = Math.min(8, Math.max(0.3, this.turnGain + this.gainStep));
+  }
+
+  /** The most promising place remembered; one found empty is trusted less, then forgotten. */
+  recall(x: number, y: number): { x: number; y: number; weight: number } | null {
+    let best: { x: number; y: number; weight: number } | null = null;
+    let bestScore = 0;
+    for (const m of this.memory) {
+      const d = Math.max(Math.abs(m.x - x), Math.abs(m.y - y));
+      if (d <= 2) {
+        // Here, and nothing to smell: the food is gone.
+        m.weight *= 0.4;
+        continue;
+      }
+      const score = m.weight / (1 + d / 60);
+      if (score > bestScore) {
+        bestScore = score;
+        best = m;
+      }
+    }
+    if (this.memory.some((m) => m.weight < 0.3)) this.memory = this.memory.filter((m) => m.weight >= 0.3);
+    return best;
+  }
+}
+
 export class NeuroBrain {
   readonly cpg = new CpgNetwork();
+
+  /** `followsGuide`: only the player's brain ant answers the guide pheromone. */
+  constructor(
+    readonly mind: NeuroMind,
+    readonly followsGuide = true,
+  ) {}
+
   /** The host ant, or -1. */
   id = -1;
   private gen = 0;
@@ -121,20 +194,12 @@ export class NeuroBrain {
   /** Feet put down since the host was chosen, and cells walked. */
   touchdowns = 0;
   walked = 0;
-  /**
-   * What the brain learns, and keeps when it moves to another ant:
-   *  - where it found food (spatial memory, as foragers learn their feeding
-   *    sites), each place weighted by how often it paid off;
-   *  - how hard to turn on a smell difference (the antennal gain), tuned trip
-   *    after trip by trial and error: a change that made the last trip to food
-   *    straighter is kept, one that made it worse is undone.
-   */
-  memory: Array<{ x: number; y: number; weight: number }> = [];
-  turnGain = NEURO.turnGain;
-  private gainStep = 0.5;
-  /** Trips to food completed, and how straight they were on average (1 = a beeline). */
-  trips = 0;
-  efficiency = 0;
+  /** Scouts ignore what the colony remembers and keep searching for new food. */
+  scout = false;
+  private exploreUntil = 0;
+  private target: { x: number; y: number; weight: number } | null = null;
+  private bestDist = 0;
+  private progressTick = 0;
   private tripFrom: { x: number; y: number; walked: number } | null = null;
   private stanceA = true;
   private stanceB = true;
@@ -154,6 +219,10 @@ export class NeuroBrain {
     this.pendingStep = false;
     this.pivotTicks = 0;
     this.scentTick = -1;
+    this.target = null;
+    this.exploreUntil = 0;
+    // About a third of foragers are scouts, as in real colonies.
+    this.scout = !this.followsGuide && id >= 0 && sim.rng.next() < 0.3;
   }
 
   valid(sim: Simulation): boolean {
@@ -206,7 +275,8 @@ export class NeuroBrain {
     }
 
     // Food in reach of the mandibles: bite it off and carry it.
-    if (carrying === Item.None) {
+    // Only food out in the open: what lies in the nest is the colony's store.
+    if (carrying === Item.None && sim.outside(x, y)) {
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
           if (sim.world.get(x + dx, y + dy) === Material.Food) {
@@ -233,7 +303,6 @@ export class NeuroBrain {
     // --- Antennae: what each one smells ------------------------------------
     const smell = this.chooseSmell(sim, id);
     const f = a.facing[id] || 1;
-    const options = steps(sim, x, y);
     let up = 0;
     let down = 0;
     for (let r = 1; r <= NEURO.antennaReach; r++) {
@@ -250,8 +319,23 @@ export class NeuroBrain {
     this.smellHere = smell(x, y);
 
     // --- Brain: descending drives ------------------------------------------
-    const ahead = options.filter(([dx]) => dx === f || dx === 0);
-    const behindStronger = this.goal !== 'explore' && Math.max(up, down) < this.smellHere - 1e-4;
+    // Steps the body could take, crowds aside (a crowd is waited out, not avoided).
+    const diving = sim.deepWater(x, y);
+    const open: Array<[number, number]> = [];
+    for (const [dx, dy] of DIRS) {
+      if (sim.walkable(x + dx, y + dy) && (diving || !sim.deepWater(x + dx, y + dy))) open.push([dx, dy]);
+    }
+    const ahead = open.filter(([dx]) => dx === f || dx === 0);
+    // The smell is stronger behind when no step ahead gains on it but a step back would.
+    let bestAhead = -1;
+    let bestBehind = -1;
+    for (const [dx, dy] of open) {
+      const v = smell(x + dx, y + dy);
+      if (dx === -f) bestBehind = Math.max(bestBehind, v);
+      else bestAhead = Math.max(bestAhead, v);
+    }
+    const here = this.smellHere;
+    const behindStronger = this.goal !== 'explore' && bestAhead <= here + 1e-9 && bestBehind > here + 1e-9;
     // At the freshest end of a guide trail: stop there and wait.
     const atGuideEnd = this.goal === 'guide' && freshestNearby(sim, x, y);
     if (this.pivotTicks > 0) this.pivotTicks--;
@@ -268,7 +352,7 @@ export class NeuroBrain {
       const total = up + down;
       // Lost the scent: keep walking with a gentle zigzag, as in the Python demo.
       const asym = total < 1e-4 ? 0.3 * Math.sin(this.walked * 0.7) : (up - down) / total;
-      const turn = this.turnGain * asym;
+      const turn = this.mind.turnGain * asym;
       this.driveL = Math.max(-1.2, NEURO.baseDrive - Math.max(0, turn));
       this.driveR = Math.max(-1.2, NEURO.baseDrive - Math.max(0, -turn));
     }
@@ -286,7 +370,10 @@ export class NeuroBrain {
     let best: readonly [number, number] | null = null;
     let bestScore = -Infinity;
     for (const [dx, dy] of ahead) {
-      let score = (dx === f ? 1 : 0.4) - dy * turn + smell(x + dx, y + dy) * 2;
+      // Climb the smell first (relative gain, so faint and strong smells steer alike),
+      // then the antennae's turn, then keep going the same way.
+      const gain = (smell(x + dx, y + dy) - here) / Math.max(here, 1e-3);
+      let score = gain * 50 + (dx === f ? 0.3 : 0.1) - dy * turn * 0.3;
       // On a wall the legs climb unless the smell says otherwise.
       if (dx === 0 && Math.abs(turn) < 0.05) score -= dy * 0.2;
       score += sim.rng.next() * 0.05;
@@ -296,56 +383,21 @@ export class NeuroBrain {
       }
     }
     if (!best) return IDLE;
+    // The way is full of nestmates: mostly wait, sometimes squeeze past another way.
+    if (!sim.canStand(x + best[0], y + best[1])) {
+      const free = steps(sim, x, y).filter(([dx]) => dx === f || dx === 0);
+      if (!free.length || sim.rng.next() < 0.6) return IDLE;
+      best = free[sim.rng.int(0, free.length - 1)];
+    }
     this.walked++;
     return { ...IDLE, moveX: best[0] as Axis, moveY: best[1] as Axis };
   }
 
-  /** Food found at (fx, fy): remember the place and grade the trip that led there. */
+  /** Food found: the colony's mind learns from this trip. */
   private learn(fx: number, fy: number): void {
-    const near = this.memory.find((m) => Math.abs(m.x - fx) <= 5 && Math.abs(m.y - fy) <= 5);
-    if (near) {
-      near.weight += 1;
-      near.x = fx;
-      near.y = fy;
-    } else {
-      this.memory.push({ x: fx, y: fy, weight: 1 });
-      this.memory.sort((p, q) => q.weight - p.weight);
-      this.memory.length = Math.min(this.memory.length, NEURO.memorySlots);
-    }
     const trip = this.tripFrom;
     this.tripFrom = null;
-    if (!trip) return;
-    const taken = this.walked - trip.walked;
-    const direct = Math.max(Math.abs(fx - trip.x), Math.abs(fy - trip.y)) - 1;
-    if (direct < 3 || taken < 1) return;
-    const eff = Math.min(1, direct / taken);
-    // Trial and error on the antennal gain: worse than usual, step back the other way, smaller.
-    if (this.trips > 0 && eff < this.efficiency) this.gainStep *= -0.6;
-    if (Math.abs(this.gainStep) < 0.1) this.gainStep = 0.1 * Math.sign(this.gainStep || 1);
-    this.efficiency = this.trips > 0 ? this.efficiency * 0.7 + eff * 0.3 : eff;
-    this.trips++;
-    this.turnGain = Math.min(8, Math.max(0.3, this.turnGain + this.gainStep));
-  }
-
-  /** The most promising place remembered; one found empty is trusted less, then forgotten. */
-  private recall(x: number, y: number): { x: number; y: number } | null {
-    let best: { x: number; y: number; weight: number } | null = null;
-    let bestScore = 0;
-    for (const m of this.memory) {
-      const d = Math.max(Math.abs(m.x - x), Math.abs(m.y - y));
-      if (d <= 2) {
-        // Here, and nothing to smell: the food is gone.
-        m.weight *= 0.4;
-        continue;
-      }
-      const score = m.weight / (1 + d / 60);
-      if (score > bestScore) {
-        bestScore = score;
-        best = m;
-      }
-    }
-    this.memory = this.memory.filter((m) => m.weight >= 0.3);
-    return best;
+    this.mind.learn(fx, fy, trip && { x: trip.x, y: trip.y, taken: this.walked - trip.walked });
   }
 
   /** Counts feet put down; each tripod touchdown lets the body take one step. */
@@ -370,7 +422,7 @@ export class NeuroBrain {
       return d === UNREACHABLE ? 0 : Math.exp(-d / 40);
     };
     // The player's guide pheromone comes first: the ant follows it to its freshest end.
-    if (sim.guideActive() && guideSmell(sim, x, y) > 0.02) {
+    if (this.followsGuide && sim.guideActive() && guideSmell(sim, x, y) > 0.02) {
       this.goal = 'guide';
       return (cx, cy) => guideSmell(sim, cx, cy);
     }
@@ -382,7 +434,7 @@ export class NeuroBrain {
       this.goal = sim.homeDist[sim.idx(x, y)] > 8 ? 'home' : 'rest';
       return nest;
     }
-    if (this.foodScent(sim, x, y)) {
+    if (sim.outside(x, y) && this.foodScent(sim, x, y)) {
       // A new trip towards food starts: remember where from, to judge it on arrival.
       if (this.goal !== 'food' || !this.tripFrom) this.tripFrom = { x, y, walked: this.walked };
       this.goal = 'food';
@@ -397,7 +449,23 @@ export class NeuroBrain {
     }
     // Nothing to smell: head for the best place remembered, by the sense of
     // direction alone (ants keep track of where they are by path integration).
-    const place = this.recall(x, y);
+    const place = this.scout || sim.tick < this.exploreUntil ? null : this.mind.recall(x, y);
+    if (place) {
+      // Give up on a place that cannot be reached (a cliff, a stone in the way):
+      // trust it less and go exploring for a while instead.
+      const d = Math.max(Math.abs(place.x - x), Math.abs(place.y - y));
+      if (place !== this.target || d < this.bestDist) {
+        this.target = place;
+        this.bestDist = d;
+        this.progressTick = sim.tick;
+      } else if (sim.tick - this.progressTick > TICK_RATE * 10) {
+        place.weight *= 0.5;
+        this.target = null;
+        this.exploreUntil = sim.tick + TICK_RATE * 30;
+        this.goal = 'explore';
+        return (cx, cy) => Math.min(1, sim.trail[sim.idx(cx, cy)]);
+      }
+    }
     if (place) {
       this.goal = 'memory';
       return (cx, cy) => Math.exp(-Math.max(Math.abs(cx - place.x), Math.abs(cy - place.y)) / 30);
