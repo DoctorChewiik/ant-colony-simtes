@@ -89,7 +89,45 @@ body {
   opacity: 0.8;
 }
 
+#neuro {
+  top: auto;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  pointer-events: auto;
+  background: rgba(20, 14, 10, 0.94);
+  width: min(520px, calc(100vw - 20px));
+  padding: 6px 10px 8px;
+}
+
+.neuro-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--accent);
+}
+
+#neuro .close {
+  font: inherit;
+  font-size: 16px;
+  background: none;
+  border: 0;
+  color: var(--panel-text);
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+#neuro-doing {
+  opacity: 0.85;
+}
+
+#neuro-canvas {
+  display: block;
+  width: 100%;
+  height: 220px;
+  margin-top: 4px;
+}
+
 #help[hidden],
+#neuro[hidden],
 #tools[hidden],
 #details[hidden],
 #alerts[hidden] {
@@ -256,6 +294,16 @@ body.touch .panel {
     font-size: 12px;
     min-width: 0;
     padding: 6px 7px;
+  }
+
+  #neuro {
+    top: auto;
+    bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+    width: auto;
+  }
+
+  #neuro-canvas {
+    height: 200px;
   }
 
   #tools {

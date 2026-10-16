@@ -49,6 +49,8 @@ export class Renderer {
   showScents = false;
   /** Follow the queen (when the player controls her) or let the camera roam free. */
   follow = false;
+  /** An ant the camera keeps in view and rings, or -1. */
+  watch = -1;
   private scenery: Scenery;
   private pantry = new Graphics();
   private worldCanvas: HTMLCanvasElement;
@@ -218,8 +220,9 @@ export class Renderer {
     this.drawBrood();
 
     // The camera follows the queen when the player controls her; otherwise it stays where it was put.
-    if (this.follow && ants.alive[sim.player]) {
-      const player = this.antViews[sim.player].pos;
+    const target = this.follow ? sim.player : this.watch;
+    if (target >= 0 && ants.alive[target] && this.antViews[target]) {
+      const player = this.antViews[target].pos;
       const kc = 1 - Math.exp(-dt / 120);
       this.camPos.x += (player.x - this.camPos.x) * kc;
       this.camPos.y += (player.y - this.camPos.y) * kc;
@@ -452,6 +455,10 @@ export class Renderer {
   private drawCursor(aimed: { x: number; y: number } | null): void {
     const g = this.cursor;
     g.clear();
+    if (this.watch >= 0 && this.sim.ants.alive[this.watch] && this.antViews[this.watch]) {
+      const p = this.antViews[this.watch].pos;
+      g.circle(p.x, p.y, 2.2).stroke({ width: 0.25, color: 0xe8b04a, alpha: 0.95 });
+    }
     if (!aimed || this.sim.gameOver) return;
     const { ants, world } = this.sim;
     const p = this.sim.player;

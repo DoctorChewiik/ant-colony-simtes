@@ -14,6 +14,7 @@ import {
   thinkQueen,
 } from '../core';
 import { Controls } from './controls';
+import { NeuroAnt } from './neuro';
 import { Renderer } from './renderer';
 import { isTouchDevice, mountTouchControls } from './touch';
 
@@ -52,8 +53,8 @@ function phaseName(t: number): string {
   return 'nuit';
 }
 
-type Tool = 'none' | 'hand' | 'water';
-const TOOL_ICONS: Record<Tool, string> = { none: '', hand: ' ✋', water: ' 💧' };
+type Tool = 'none' | 'hand' | 'water' | 'neuro';
+const TOOL_ICONS: Record<Tool, string> = { none: '', hand: ' ✋', water: ' 💧', neuro: ' 🧠' };
 const BRUSHES = [
   { label: 'Petit', radius: 0.6 },
   { label: 'Moyen', radius: 1.6 },
@@ -100,6 +101,12 @@ async function start() {
   const pausedLabel = document.getElementById('paused')!;
   const toolbar = document.getElementById('toolbar')!;
   const toolsPanel = document.getElementById('tools')!;
+  const neuroPanel = document.getElementById('neuro')!;
+  const neuroTitle = document.getElementById('neuro-title')!;
+  const neuroDoing = document.getElementById('neuro-doing')!;
+  const neuroCanvas = document.getElementById('neuro-canvas') as HTMLCanvasElement;
+  const neuroCtx = neuroCanvas.getContext('2d')!;
+  const neuro = new NeuroAnt();
 
   let seed = Number(new URLSearchParams(location.search).get('seed')) || Math.floor(Math.random() * 1e9);
   let sim = new Simulation({ seed, ...WORLD });
@@ -124,6 +131,7 @@ async function start() {
   const newWorld = () => {
     app.stage.removeChildren();
     sim.dropHeld();
+    watchAnt(-1);
     seed = Math.floor(Math.random() * 1e9);
     const disposal = sim.digDisposal;
     sim = new Simulation({ seed, ...WORLD });
@@ -149,6 +157,31 @@ async function start() {
     scentButton.classList.toggle('on', renderer.showScents);
   };
 
+  /** Opens the neuro panel on an ant (or closes it with -1) and keeps the camera on it. */
+  const watchAnt = (id: number) => {
+    neuro.select(sim, id);
+    renderer.watch = id;
+    neuroPanel.hidden = id < 0;
+  };
+  document.getElementById('neuro-close')!.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    watchAnt(-1);
+  });
+  const nearestAnt = (x: number, y: number, reach = 4): number => {
+    const a = sim.ants;
+    let best = -1;
+    let bestD = reach + 0.5;
+    for (let i = 0; i < a.count; i++) {
+      if (!a.alive[i]) continue;
+      const d = Math.hypot(a.x[i] - x, a.y[i] - y);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
+  };
+
   const toolButtons = new Map<Tool, HTMLButtonElement>();
   const brushButtons: HTMLButtonElement[] = [];
   const setTool = (t: Tool) => {
@@ -158,7 +191,7 @@ async function start() {
     menuButton.textContent = '☰' + TOOL_ICONS[t];
     menuButton.classList.toggle('on', t !== 'none');
     for (const [k, b] of toolButtons) b.classList.toggle('on', k === t);
-    app.canvas.style.cursor = t === 'hand' ? 'grab' : t === 'water' ? 'crosshair' : '';
+    app.canvas.style.cursor = t === 'hand' ? 'grab' : t === 'water' || t === 'neuro' ? 'crosshair' : '';
   };
   const setBrush = (k: number) => {
     brush = k;
@@ -174,6 +207,7 @@ async function start() {
   for (const [t, label, title] of [
     ['hand', '✋ Main', 'Attraper et lâcher les fourmis et les blocs'],
     ['water', '💧 Eau', "Verser de l'eau"],
+    ['neuro', '🧠 Neuro', 'Voir les pattes et le cerveau d\'une fourmi'],
     ['none', 'Aucun', 'Déplacer la vue'],
   ] as [Tool, string, string][]) {
     const b = makeButton(label, title, () => pickTool(t));
@@ -262,6 +296,9 @@ async function start() {
 
     // Tools from the menu act on the cell under the pointer.
     const cell = controls.painting ? mouseCell() : null;
+    const tap = controls.toolTap ? renderer.screenToCell(controls.toolTap.x, controls.toolTap.y) : null;
+    controls.toolTap = null;
+    if (tool === 'water' && tap && !cell) sim.pourWater(tap.x, tap.y, BRUSHES[brush].radius);
     if (tool === 'water' && cell) {
       pourAcc += ticker.deltaMS;
       for (; pourAcc >= TICK_MS; pourAcc -= TICK_MS) sim.pourWater(cell.x, cell.y, BRUSHES[brush].radius);
@@ -272,7 +309,31 @@ async function start() {
       else if (!controls.painting && wasPainting) sim.dropHeld();
       app.canvas.style.cursor = controls.painting && (sim.held >= 0 || sim.heldCell >= 0) ? 'grabbing' : 'grab';
     }
+    if (tool === 'neuro' && tap) {
+      const id = nearestAnt(tap.x, tap.y);
+      if (id >= 0) watchAnt(id);
+    }
     wasPainting = controls.painting;
+
+    // The ant under the neuro lens: CPG and brain step with the game clock.
+    if (!neuroPanel.hidden) {
+      if (!neuro.valid(sim)) watchAnt(-1);
+      else {
+        neuro.update(sim, paused ? 0 : ticker.deltaMS * SPEEDS[speed]);
+        const w = neuroCanvas.clientWidth;
+        const h = neuroCanvas.clientHeight;
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        if (neuroCanvas.width !== Math.round(w * dpr)) {
+          neuroCanvas.width = Math.round(w * dpr);
+          neuroCanvas.height = Math.round(h * dpr);
+        }
+        neuroCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        neuro.draw(neuroCtx, w, h, sim);
+        const words = neuro.describe(sim);
+        neuroTitle.textContent = `🧠 ${words.title}`;
+        neuroDoing.textContent = `Elle ${words.doing}.`;
+      }
+    }
 
     if (!controlling) {
       const d = controls.direction();

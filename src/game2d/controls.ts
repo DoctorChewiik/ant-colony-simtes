@@ -36,6 +36,8 @@ export class Controls {
   toolActive = false;
   /** The pointer is held down with a tool. */
   painting = false;
+  /** Where the pointer last went down with a tool, kept until the game reads it (a quick tap can end between frames). */
+  toolTap: { x: number; y: number } | null = null;
   private dragFrom: { x: number; y: number } | null = null;
 
   constructor(target: HTMLElement) {
@@ -96,6 +98,7 @@ export class Controls {
       this.mouse = { x: e.clientX, y: e.clientY };
       if (this.toolActive) {
         this.painting = true;
+        this.toolTap = { x: e.clientX, y: e.clientY };
         return;
       }
       if (this.spectator) {
