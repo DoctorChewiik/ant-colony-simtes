@@ -1,4 +1,5 @@
 import { UNREACHABLE, thinkAnt } from './ai';
+import { NeuroBrain } from './neuro';
 import { Ants, CASTES, Caste, ENERGY_MAX, HUNGRY, Item, JOBS, SPECIALIST, Task } from './ants';
 import { Brood, STAGE_TICKS, Stage } from './brood';
 import { ENEMIES, Enemies, EnemyKind } from './enemies';
@@ -178,6 +179,8 @@ export class Simulation {
   readonly ants = new Ants(1024);
   readonly brood = new Brood(1024);
   readonly enemies = new Enemies(32);
+  /** The one ant whose legs and brain run the neuromechanical controller (see neuro.ts). */
+  readonly neuro = new NeuroBrain();
   readonly player: number;
   readonly stats: SimStats = {
     dug: 0,
@@ -285,8 +288,10 @@ export class Simulation {
 
   step(playerInput: AntInput): void {
     if (!this.gameOver) this.updateAnt(this.player, playerInput);
+    this.neuro.ensure(this);
     for (let id = 0; id < this.ants.count; id++) {
-      if (id !== this.player && this.ants.alive[id]) this.updateAnt(id, thinkAnt(this, id));
+      if (id === this.player || !this.ants.alive[id]) continue;
+      this.updateAnt(id, id === this.neuro.id ? this.neuro.think(this, id) : thinkAnt(this, id));
     }
     this.updateEnemies();
     this.updateBrood();

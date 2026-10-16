@@ -1,4 +1,4 @@
-import { Caste, Item, Material, Task, UNREACHABLE, type Simulation } from '../core';
+import { Caste, Item, Material, NEURO, UNREACHABLE, type CpgNetwork, type NeuroBrain, type NeuroGoal, type Simulation } from '../core';
 
 /**
  * A neuromechanical view of one ant, after NeuroMechFly / flygym (EPFL):
@@ -13,37 +13,22 @@ import { Caste, Item, Material, Task, UNREACHABLE, type Simulation } from '../co
  */
 
 const TAU = Math.PI * 2;
-/** Tripod gait: legs 0, 2, 4 (LF, LH, RM) in phase, anti-phase to 1, 3, 5. As flygym's tripod phase biases. */
-const PHASE_BIAS = [
-  [0, 1, 0, 1, 0, 1],
-  [1, 0, 1, 0, 1, 0],
-  [0, 1, 0, 1, 0, 1],
-  [1, 0, 1, 0, 1, 0],
-  [0, 1, 0, 1, 0, 1],
-  [1, 0, 1, 0, 1, 0],
-].map((row) => row.map((v) => v * Math.PI));
-const COUPLING = 10;
-const CONVERGENCE = 20;
-/** Steps per second at full drive (slowed down from a real ant's ~10 Hz so it can be watched). */
-const STEP_FREQ = 3;
-/** Part of each step cycle a leg spends in the air. */
-const SWING = 0.4;
-/** Moves per second of an ant walking at full speed in the game. */
-const FULL_SPEED = 6;
+const SWING = NEURO.swing;
 
 const LEG_NAMES = ['AG', 'MG', 'PG', 'AD', 'MD', 'PD'];
-const TASK_NAMES: Record<number, string> = {
-  [Task.Idle]: 'repos',
-  [Task.Forage]: 'fourrageuse',
-  [Task.Dig]: 'terrassière',
-  [Task.Nurse]: 'nourrice',
-  [Task.Guard]: 'garde',
-};
 const CASTE_NAMES: Record<number, string> = {
   [Caste.Worker]: 'Ouvrière',
   [Caste.Soldier]: 'Soldat',
   [Caste.Queen]: 'Reine',
   [Caste.Male]: 'Mâle',
+};
+const GOALS: Record<NeuroGoal, string> = {
+  food: 'remonte l\'odeur de nourriture',
+  home: 'suit l\'odeur du nid',
+  air: 'remonte vers l\'air libre',
+  explore: 'explore et cherche une odeur',
+  rest: 'se repose au nid',
+  reflex: 'agit par réflexe',
 };
 
 /** What the ant's body is clinging to, which sets how the body is drawn. */
@@ -58,119 +43,56 @@ export interface Senses {
   water: number;
 }
 
-export class CpgNetwork {
-  readonly phases = new Float64Array(6);
-  readonly mags = new Float64Array(6);
-  readonly freqs = new Float64Array(6);
-  readonly amps = new Float64Array(6);
-
-  constructor() {
-    for (let i = 0; i < 6; i++) this.phases[i] = (i % 2) * Math.PI + 0.3 * Math.sin(i * 7.1);
-  }
-
-  /** One Euler step: dθi = 2π fi + Σj rj wij sin(θj − θi − φij);  dri = a (Ri − ri). */
-  step(dt: number, driveL: number, driveR: number): void {
-    for (let i = 0; i < 6; i++) {
-      const drive = i < 3 ? driveL : driveR;
-      this.amps[i] = Math.min(1, Math.abs(drive));
-      this.freqs[i] = STEP_FREQ * (drive < 0 ? -1 : 1) * (0.5 + 0.5 * this.amps[i]);
-    }
-    const d = new Float64Array(6);
-    for (let i = 0; i < 6; i++) {
-      let coupling = 0;
-      // As in flygym, legs are coupled only to the legs of the other tripod.
-      for (let j = 0; j < 6; j++) {
-        if (!PHASE_BIAS[i][j]) continue;
-        coupling += this.mags[j] * COUPLING * Math.sin(this.phases[j] - this.phases[i] - PHASE_BIAS[i][j]);
-      }
-      // A leg at rest does not cycle: frequency fades with the oscillator's amplitude.
-      d[i] = TAU * this.freqs[i] * Math.min(1, this.mags[i] * 4) + coupling;
-    }
-    for (let i = 0; i < 6; i++) {
-      this.phases[i] = (this.phases[i] + d[i] * dt + TAU) % TAU;
-      this.mags[i] += CONVERGENCE * (this.amps[i] - this.mags[i]) * dt;
-    }
-  }
-
-  /** True while the leg is on the ground (stance): its foot pad sticks. */
-  adhered(i: number): boolean {
-    return this.phases[i] / TAU >= SWING || this.mags[i] < 0.05;
-  }
-}
-
-/** The ant the player chose to look inside, with its CPG and what its brain reads. */
+/**
+ * The panel view of the neuromechanical ant. The controller itself (CPG,
+ * antennae, brain) runs in the simulation, in core/neuro.ts; this only draws it.
+ */
 export class NeuroAnt {
-  readonly cpg = new CpgNetwork();
-  id = -1;
-  private gen = 0;
-  private lastX = 0;
-  private lastY = 0;
-  private speed = 0;
-  private turnUntil = 0;
-  private lastFacing = 1;
-  private facingSince = 0;
   private time = 0;
   /** Ground travelled, so the ground under the planted feet scrolls with them. */
   private groundShift = 0;
-  driveL = 0;
-  driveR = 0;
+  private brain: NeuroBrain | null = null;
   surface: Surface = 'floor';
   senses: Senses = { food: 0, trail: 0, alarm: 0, home: 0, light: 0, water: 0 };
 
+  get id(): number {
+    return this.brain?.id ?? -1;
+  }
+
+  private get cpg(): CpgNetwork {
+    return this.brain!.cpg;
+  }
+
+  /** Moves the controller onto another ant (the player's queen keeps her own controls). */
   select(sim: Simulation, id: number): void {
-    this.id = id;
-    this.gen = id >= 0 ? sim.ants.gen[id] : 0;
-    if (id >= 0) {
-      this.lastX = sim.ants.x[id];
-      this.lastY = sim.ants.y[id];
-      this.lastFacing = sim.ants.facing[id] || 1;
+    this.brain = sim.neuro;
+    if (id >= 0 && id !== sim.player && id !== sim.neuro.id) {
+      sim.neuro.auto = false;
+      sim.neuro.attach(sim, id);
     }
   }
 
-  /** Still the same living ant? */
+  /** The controller has a living host. */
   valid(sim: Simulation): boolean {
-    return this.id >= 0 && sim.ants.alive[this.id] === 1 && sim.ants.gen[this.id] === this.gen;
+    this.brain = sim.neuro;
+    return sim.neuro.valid(sim);
   }
 
   update(sim: Simulation, dtMs: number): void {
-    if (!this.valid(sim)) return;
-    if (dtMs <= 0) return;
+    if (!this.valid(sim) || dtMs <= 0) return;
     const dt = Math.min(0.05, dtMs / 1000);
     this.time += dt;
-    const a = sim.ants;
-    const id = this.id;
-    const x = a.x[id];
-    const y = a.y[id];
-    const moved = Math.hypot(x - this.lastX, y - this.lastY);
-    this.lastX = x;
-    this.lastY = y;
-    // Smoothed walking speed, in moves per second of game time.
-    this.speed += ((moved > 0 ? moved / dt : 0) - this.speed) * Math.min(1, dt * 4);
+    const x = sim.ants.x[this.id];
+    const y = sim.ants.y[this.id];
     this.surface = this.findSurface(sim, x, y);
     this.senses = this.sense(sim, x, y);
-
-    // Brain → descending drives. Walking forwards drives both sides alike;
-    // turning round drives the sides in opposite directions for a moment.
-    const facing = a.facing[id] || 1;
-    // A real about-turn, not a jostle back and forth in a crowd.
-    if (facing !== this.lastFacing) {
-      if (this.time - this.facingSince > 0.8) this.turnUntil = this.time + 0.3;
-      this.facingSince = this.time;
-    }
-    this.lastFacing = facing;
-    const drive = this.surface === 'none' ? 0 : Math.min(1.2, this.speed / FULL_SPEED);
-    if (this.time < this.turnUntil) {
-      this.driveL = 0.8;
-      this.driveR = -0.8;
-    } else {
-      this.driveL = drive;
-      this.driveR = drive;
-    }
-    this.cpg.step(dt, this.driveL, this.driveR);
     // Stance feet move back at the stride speed; the ground moves with them.
-    const stride = 26 * (this.cpg.mags[0] + this.cpg.mags[3]) / 2;
-    const freq = STEP_FREQ * (0.5 + 0.5 * Math.min(1, Math.abs(this.driveL)));
-    if (this.time >= this.turnUntil) this.groundShift += (stride * freq * dt) / (1 - SWING);
+    const b = this.brain!;
+    if (b.driveL > 0 && b.driveR > 0) {
+      const stride = (26 * (this.cpg.mags[0] + this.cpg.mags[3])) / 2;
+      const freq = NEURO.stepFrequency * (0.5 + 0.5 * Math.min(1, b.driveL));
+      this.groundShift += (stride * freq * dt) / (1 - SWING);
+    }
   }
 
   private findSurface(sim: Simulation, x: number, y: number): Surface {
@@ -209,17 +131,18 @@ export class NeuroAnt {
     const a = sim.ants;
     const id = this.id;
     const caste = a.caste[id] as Caste;
-    const job = caste === Caste.Worker ? ` · ${TASK_NAMES[a.task[id]] ?? ''}` : '';
+    // The brain makes it a forager whatever job the colony had given it.
+    const job = caste === Caste.Worker ? ' · fourrageuse neuro' : '';
     let doing = 'se repose';
     if (sim.held === id) doing = 'est tenue par ta main';
     else if (this.surface === 'water') doing = 'nage vers l\'air';
     else if (this.surface === 'none') doing = 'tombe, les pattes écartées';
     else if (a.digTarget[id] >= 0) doing = 'creuse avec ses mandibules';
-    else if (a.carrying[id] === Item.Food) doing = 'rapporte de la nourriture';
+    else if (a.carrying[id] === Item.Food) doing = 'rapporte de la nourriture en suivant l\'odeur du nid';
     else if (a.carrying[id] === Item.Soil) doing = 'porte une boulette de terre';
     else if (a.carrying[id] === Item.Brood) doing = 'porte du couvain';
     else if (a.carrying[id] === Item.Corpse) doing = 'emporte une fourmi morte';
-    else if (this.speed > 0.5) doing = this.surface === 'ceiling' ? 'marche au plafond' : this.surface.startsWith('wall') ? 'grimpe le long de la paroi' : 'marche';
+    else doing = GOALS[this.brain!.goal];
     return { title: `${CASTE_NAMES[caste]}${job} n°${id}`, doing };
   }
 
@@ -423,8 +346,10 @@ export class NeuroAnt {
   private drawReadings(ctx: CanvasRenderingContext2D, x: number, top: number, h: number, w: number): void {
     const s = this.senses;
     const rows: Array<[string, number]> = [
-      ['Ordre G', this.driveL],
-      ['Ordre D', this.driveR],
+      ['Ordre G', this.brain!.driveL],
+      ['Ordre D', this.brain!.driveR],
+      ['Antenne G', this.brain!.smellL],
+      ['Antenne D', this.brain!.smellR],
       ['Nourrit.', s.food],
       ['Piste', s.trail],
       ['Alarme', s.alarm],
@@ -442,7 +367,7 @@ export class NeuroAnt {
       const bw = Math.max(20, w - 62);
       ctx.fillStyle = 'rgba(243, 233, 220, 0.15)';
       ctx.fillRect(bx, ry + 2, bw, 8);
-      ctx.fillStyle = k < 2 ? (v < 0 ? '#d0453a' : '#8ace00') : '#e8b04a';
+      ctx.fillStyle = k < 2 ? (v < 0 ? '#d0453a' : '#8ace00') : k < 4 ? '#7fc2e6' : '#e8b04a';
       ctx.fillRect(bx, ry + 2, bw * Math.min(1, Math.abs(v)), 8);
     });
   }

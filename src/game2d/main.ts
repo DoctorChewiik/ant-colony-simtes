@@ -119,6 +119,8 @@ async function start() {
   let brush = 1;
   let pourAcc = 0;
   let wasPainting = false;
+  /** The neuro panel opened by itself once, when the controller found its first ant. */
+  let neuroShown = false;
 
   const setControlling = (on: boolean) => {
     controlling = on && !sim.gameOver;
@@ -137,6 +139,7 @@ async function start() {
     sim = new Simulation({ seed, ...WORLD });
     sim.digDisposal = disposal;
     renderer = new Renderer(app, sim);
+    neuroShown = false;
     setControlling(false);
   };
 
@@ -207,7 +210,7 @@ async function start() {
   for (const [t, label, title] of [
     ['hand', '✋ Main', 'Attraper et lâcher les fourmis et les blocs'],
     ['water', '💧 Eau', "Verser de l'eau"],
-    ['neuro', '🧠 Neuro', 'Voir les pattes et le cerveau d\'une fourmi'],
+    ['neuro', '🧠 Neuro', 'Donner le cerveau neuro à une fourmi'],
     ['none', 'Aucun', 'Déplacer la vue'],
   ] as [Tool, string, string][]) {
     const b = makeButton(label, title, () => pickTool(t));
@@ -315,10 +318,16 @@ async function start() {
     }
     wasPainting = controls.painting;
 
-    // The ant under the neuro lens: CPG and brain step with the game clock.
+    // The neuromechanical controller runs in the simulation from the start; its
+    // panel opens by itself the first time it takes over an ant.
+    if (!neuroShown && sim.neuro.valid(sim)) {
+      neuroShown = true;
+      watchAnt(sim.neuro.id);
+    }
     if (!neuroPanel.hidden) {
       if (!neuro.valid(sim)) watchAnt(-1);
       else {
+        renderer.watch = sim.neuro.id;
         neuro.update(sim, paused ? 0 : ticker.deltaMS * SPEEDS[speed]);
         const w = neuroCanvas.clientWidth;
         const h = neuroCanvas.clientHeight;

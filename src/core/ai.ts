@@ -56,7 +56,7 @@ function chebyshev(ax: number, ay: number, bx: number, by: number): number {
 }
 
 /** Cells next to the ant it could step onto. Ants keep out of water too deep to breathe in. */
-function steps(sim: Simulation, x: number, y: number): Array<[number, number]> {
+export function steps(sim: Simulation, x: number, y: number): Array<[number, number]> {
   const out: Array<[number, number]> = [];
   const diving = sim.deepWater(x, y);
   for (const [dx, dy] of DIRS) {
@@ -150,7 +150,7 @@ function toward(sim: Simulation, id: number, tx: number, ty: number): AntInput {
   return best ? move(best[0], best[1]) : wander(sim, id);
 }
 
-function nearestEnemy(sim: Simulation, x: number, y: number, range: number): number {
+export function nearestEnemy(sim: Simulation, x: number, y: number, range: number): number {
   const e = sim.enemies;
   let best = -1;
   let bestDist = range + 1;
