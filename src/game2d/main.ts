@@ -52,6 +52,14 @@ function phaseName(t: number): string {
   return 'nuit';
 }
 
+type Tool = 'none' | 'hand' | 'water';
+const TOOL_ICONS: Record<Tool, string> = { none: '', hand: ' ✋', water: ' 💧' };
+const BRUSHES = [
+  { label: 'Petit', radius: 0.6 },
+  { label: 'Moyen', radius: 1.6 },
+  { label: 'Gros', radius: 3.2 },
+];
+
 const plural = (n: number, one: string, many: string) => `${n} ${n > 1 ? many : one}`;
 
 function makeButton(label: string, title: string, onClick: () => void): HTMLButtonElement {
@@ -91,6 +99,7 @@ async function start() {
   const help = document.getElementById('help')!;
   const pausedLabel = document.getElementById('paused')!;
   const toolbar = document.getElementById('toolbar')!;
+  const toolsPanel = document.getElementById('tools')!;
 
   let seed = Number(new URLSearchParams(location.search).get('seed')) || Math.floor(Math.random() * 1e9);
   let sim = new Simulation({ seed, ...WORLD });
@@ -99,6 +108,10 @@ async function start() {
   let speed = 0;
   let controlling = false;
   let acc = 0;
+  let tool: Tool = 'none';
+  let brush = 1;
+  let pourAcc = 0;
+  let wasPainting = false;
 
   const setControlling = (on: boolean) => {
     controlling = on && !sim.gameOver;
@@ -110,6 +123,7 @@ async function start() {
 
   const newWorld = () => {
     app.stage.removeChildren();
+    sim.dropHeld();
     seed = Math.floor(Math.random() * 1e9);
     const disposal = sim.digDisposal;
     sim = new Simulation({ seed, ...WORLD });
@@ -135,11 +149,52 @@ async function start() {
     scentButton.classList.toggle('on', renderer.showScents);
   };
 
+  const toolButtons = new Map<Tool, HTMLButtonElement>();
+  const brushButtons: HTMLButtonElement[] = [];
+  const setTool = (t: Tool) => {
+    sim.dropHeld();
+    tool = t;
+    controls.toolActive = t !== 'none';
+    menuButton.textContent = '☰' + TOOL_ICONS[t];
+    menuButton.classList.toggle('on', t !== 'none');
+    for (const [k, b] of toolButtons) b.classList.toggle('on', k === t);
+    app.canvas.style.cursor = t === 'hand' ? 'grab' : t === 'water' ? 'crosshair' : '';
+  };
+  const setBrush = (k: number) => {
+    brush = k;
+    brushButtons.forEach((b, i) => b.classList.toggle('on', i === k));
+  };
+  const toggleMenu = () => (toolsPanel.hidden = !toolsPanel.hidden);
+  const pickTool = (t: Tool) => {
+    setTool(tool === t ? 'none' : t);
+    // Close the menu so the whole screen is free to pour or grab.
+    toolsPanel.hidden = true;
+  };
+  const toolList = document.getElementById('tool-list')!;
+  for (const [t, label, title] of [
+    ['hand', '✋ Main', 'Attraper et lâcher les fourmis et les blocs'],
+    ['water', '💧 Eau', "Verser de l'eau"],
+    ['none', 'Aucun', 'Déplacer la vue'],
+  ] as [Tool, string, string][]) {
+    const b = makeButton(label, title, () => pickTool(t));
+    toolButtons.set(t, b);
+    toolList.append(b);
+  }
+  const sizeList = document.getElementById('size-list')!;
+  BRUSHES.forEach((br, k) => {
+    const b = makeButton(br.label, `Taille du jet d'eau : ${br.label.toLowerCase()}`, () => setBrush(k));
+    brushButtons.push(b);
+    sizeList.append(b);
+  });
+  document.getElementById('tool-actions')!.append(makeButton("Vider l'eau", "Retirer toute l'eau", () => sim.water.clear()));
+
+  const menuButton = makeButton('☰', 'Outils : main, eau', toggleMenu);
   const pauseButton = makeButton('II', 'Pause', togglePause);
   const speedButton = makeButton('×1', 'Vitesse du temps', cycleSpeed);
   const queenButton = makeButton('Reine', 'Prendre la reine en main', () => setControlling(!controlling));
   const scentButton = makeButton('Odeurs', 'Voir les phéromones', toggleScents);
   toolbar.append(
+    menuButton,
     pauseButton,
     speedButton,
     queenButton,
@@ -162,7 +217,10 @@ async function start() {
     else if (code === 'KeyX') cycleSpeed();
     else if (code === 'KeyC') setControlling(!controlling);
     else if (code === 'KeyR') renderer.resetView();
+    else if (code === 'KeyB') toggleMenu();
   };
+
+  setBrush(brush);
 
   if (isTouchDevice()) {
     document.body.classList.add('touch');
@@ -201,6 +259,20 @@ async function start() {
       if (steps === MAX_STEPS_PER_FRAME) acc = 0;
     }
     if (controlling && sim.gameOver) setControlling(false);
+
+    // Tools from the menu act on the cell under the pointer.
+    const cell = controls.painting ? mouseCell() : null;
+    if (tool === 'water' && cell) {
+      pourAcc += ticker.deltaMS;
+      for (; pourAcc >= TICK_MS; pourAcc -= TICK_MS) sim.pourWater(cell.x, cell.y, BRUSHES[brush].radius);
+    }
+    if (tool === 'hand') {
+      if (cell && !wasPainting) sim.grab(cell.x, cell.y);
+      else if (cell) sim.moveHeld(cell.x, cell.y);
+      else if (!controls.painting && wasPainting) sim.dropHeld();
+      app.canvas.style.cursor = controls.painting && (sim.held >= 0 || sim.heldCell >= 0) ? 'grabbing' : 'grab';
+    }
+    wasPainting = controls.painting;
 
     if (!controlling) {
       const d = controls.direction();
@@ -267,8 +339,9 @@ async function start() {
           `Ouvrières : ${tasks[Task.Nurse]} nourrices · ${tasks[Task.Dig]} terrassières · ${tasks[Task.Forage]} fourrageuses`,
           `Couvain : ${stages[Stage.Egg]} œufs · ${stages[Stage.Larva]} larves · ${stages[Stage.Pupa]} nymphes`,
           `Nid : ${sim.chambers.filter((c) => sim.chamberFloor(c) >= 0).length}/${sim.chambers.length} chambres · ${sim.plan.filter((n) => n.room).length} prévues au total`,
-          `Morts : ${s.antsLost} (${s.buried} au cimetière, ${s.starved} de faim, ${s.diedOfAge} de vieillesse) · Envolés : ${s.flown}`,
+          `Morts : ${s.antsLost} (${s.buried} au cimetière, ${s.starved} de faim, ${s.diedOfAge} de vieillesse, ${s.drowned} noyées, ${s.fell} de chute) · Envolés : ${s.flown}`,
           `Araignées tuées : ${s.enemiesKilled} · Nourriture rapportée : ${s.delivered}`,
+          `Eau : ${sim.water.count} cases`,
           `Terre creusée : ${DISPOSAL_NAMES[sim.digDisposal]} · Graine : ${seed}`,
         ].join('<br>');
     // Only touch the page when the text changes; rewriting it every frame costs smoothness.

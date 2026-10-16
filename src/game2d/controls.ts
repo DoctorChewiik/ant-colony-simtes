@@ -32,6 +32,10 @@ export class Controls {
   onPan: (dx: number, dy: number) => void = () => {};
   /** True while the colony plays itself: the pointer moves the camera instead of digging. */
   spectator = true;
+  /** A tool from the menu is selected: the pointer uses it instead of panning or digging. */
+  toolActive = false;
+  /** The pointer is held down with a tool. */
+  painting = false;
   private dragFrom: { x: number; y: number } | null = null;
 
   constructor(target: HTMLElement) {
@@ -51,6 +55,7 @@ export class Controls {
     // Two fingers on the game pinch-zoom; one finger or the mouse aims and digs.
     const touches = new Map<number, { x: number; y: number }>();
     let pinch = 0;
+    let mid: { x: number; y: number } | null = null;
     const spread = () => {
       const [a, b] = [...touches.values()];
       return Math.hypot(a.x - b.x, a.y - b.y);
@@ -60,8 +65,12 @@ export class Controls {
       if (touches.size === 2) {
         const d = spread();
         const [a, b] = [...touches.values()];
-        if (pinch > 0) this.onZoom(d / pinch, (a.x + b.x) / 2, (a.y + b.y) / 2);
+        const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        if (pinch > 0) this.onZoom(d / pinch, m.x, m.y);
+        // Two fingers also move the view, so it can be panned while a tool is in hand.
+        if (mid) this.onPan(m.x - mid.x, m.y - mid.y);
         pinch = d;
+        mid = m;
         return;
       }
       if (this.spectator && this.dragFrom) {
@@ -79,10 +88,16 @@ export class Controls {
       if (touches.size >= 2) {
         this.mouseDown = false;
         this.dragFrom = null;
+        this.painting = false;
         pinch = spread();
+        mid = null;
         return;
       }
       this.mouse = { x: e.clientX, y: e.clientY };
+      if (this.toolActive) {
+        this.painting = true;
+        return;
+      }
       if (this.spectator) {
         this.dragFrom = { x: e.clientX, y: e.clientY };
         return;
@@ -93,8 +108,12 @@ export class Controls {
     const release = (e: PointerEvent) => {
       touches.delete(e.pointerId);
       this.dragFrom = null;
-      if (touches.size < 2) pinch = 0;
+      if (touches.size < 2) {
+        pinch = 0;
+        mid = null;
+      }
       this.mouseDown = false;
+      this.painting = false;
       if (e.pointerType !== 'mouse') this.mouse = null;
     };
     window.addEventListener('pointerup', release);

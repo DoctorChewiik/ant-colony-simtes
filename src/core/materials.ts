@@ -15,6 +15,8 @@ export enum Material {
   Sand = 8,
   /** Dense grey subsoil deep down, slow to dig. */
   Stone = 9,
+  /** Water poured by the player. It flows, fills tunnels and soaks into the ground. */
+  Water = 10,
 }
 
 export interface MaterialInfo {
@@ -37,6 +39,7 @@ export const MATERIALS: Record<Material, MaterialInfo> = {
   [Material.Corpse]: { name: 'dead ant', solid: true, digTicks: 2, granular: true },
   [Material.Sand]: { name: 'sand', solid: true, digTicks: 8, granular: false },
   [Material.Stone]: { name: 'stone', solid: true, digTicks: 40, granular: false },
+  [Material.Water]: { name: 'water', solid: false, digTicks: 0, granular: false },
 };
 
 export function isSolid(m: Material): boolean {

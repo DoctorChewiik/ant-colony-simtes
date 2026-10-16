@@ -5,6 +5,11 @@ type Rgb = [number, number, number];
 
 /** Base shades per material; each cell picks one by a hash so the ground looks grainy. */
 const SHADES: Record<Material, Rgb[]> = {
+  [Material.Water]: [
+    [58, 120, 196],
+    [62, 126, 202],
+    [55, 116, 190],
+  ],
   [Material.Air]: [
     [124, 88, 60],
     [118, 84, 57],
@@ -84,6 +89,12 @@ export function cellColor(world: World, x: number, y: number): Rgba {
     const edge = (dx: number, dy: number) => world.get(x + dx, y + dy) !== Material.Rock;
     if (edge(0, -1)) [r, g, b] = [158, 158, 164];
     else if (edge(-1, 0) || edge(1, 0) || edge(0, 1)) [r, g, b] = [88, 88, 94];
+  }
+  if (m === Material.Water) {
+    // A bright line where the water meets the air.
+    if (world.get(x, y - 1) !== Material.Water) [r, g, b] = [128, 186, 236];
+    // Over the open sky the scenery shows through a little.
+    if (y < surface) return [Math.round(r), Math.round(g), Math.round(b), 215];
   }
   if (m === Material.Air) {
     // Tunnel walls are a touch darker than the middle of a chamber.

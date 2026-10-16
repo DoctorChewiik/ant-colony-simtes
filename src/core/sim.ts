@@ -6,6 +6,7 @@ import type { AntInput } from './input';
 import { MATERIALS, Material, isDiggable } from './materials';
 import { generateNestPlan, rasterizePlan, type PlanNode } from './nestplan';
 import { Rng } from './rng';
+import { Water } from './water';
 import { generateWorld } from './worldgen';
 import type { World } from './world';
 
@@ -52,6 +53,12 @@ export const RETASK_TICKS = 600;
 export const LARVA_MEAL = 150;
 /** A hungry ant with an empty reserve loses 1 hp this often. */
 const STARVE_TICKS = 300;
+/** A fully submerged ant loses one hit point this often. Ants hold their breath a while. */
+const DROWN_TICKS = 45;
+/** An ant can drop this many cells unhurt; every further two cells cost one hit point. */
+export const SAFE_FALL = 6;
+/** Damage a falling block does to each ant it lands on. */
+const CRUSH = 5;
 /** Nuptial flights: every 3 minutes, for 30 seconds, once the colony has enough workers. */
 export const FLIGHT_PERIOD = 30 * 180;
 export const FLIGHT_WINDOW = 30 * 30;
@@ -128,6 +135,9 @@ export interface SimStats {
   flown: number;
   diedOfAge: number;
   starved: number;
+  drowned: number;
+  /** Ants killed by a fall. */
+  fell: number;
 }
 
 export interface Colony {
@@ -178,6 +188,8 @@ export class Simulation {
     flown: 0,
     diedOfAge: 0,
     starved: 0,
+    drowned: 0,
+    fell: 0,
   };
   readonly colony: Colony;
   digDisposal = DigDisposal.Surface;
@@ -224,10 +236,21 @@ export class Simulation {
   private readonly broodGrid: Int32Array;
   /** Loose soil and food cells that may still fall. */
   private settling = new Set<number>();
+  /** Water the player has poured into the world. */
+  readonly water: Water;
+  /** The ant held in the player's hand, or -1. It does nothing while held. */
+  held = -1;
+  /** The world cell (a block of ground) held in the player's hand, or -1. */
+  heldCell = -1;
+  /** Blocks the player let go of, falling until they land. */
+  private fallingBlocks = new Set<number>();
+  /** Row where each ant started falling, or -1 while it stands. */
+  private fallFrom: Int16Array;
   private readonly layCooldown: Uint16Array;
 
   constructor(readonly options: SimOptions) {
     this.world = generateWorld(options);
+    this.water = new Water(this.world);
     this.rng = new Rng(options.seed ^ 0x9e3779b9);
     const cells = this.world.width * this.world.height;
     this.antGrid = new Uint8Array(cells);
@@ -241,6 +264,7 @@ export class Simulation {
     this.digDist = new Int16Array(cells);
     this.planMask = new Uint8Array(cells);
     this.layCooldown = new Uint16Array(this.ants.capacity);
+    this.fallFrom = new Int16Array(this.ants.capacity).fill(-1);
     const sx = Math.floor(options.width / 2);
     const sy = this.world.surface[sx] - 1;
     this.colony = { food: STARTING_FOOD, nestX: sx, nestY: sy, alarmX: 0, alarmY: 0, alarmTick: -1e9 };
@@ -270,6 +294,8 @@ export class Simulation {
       const al = this.alarm;
       for (let i = 0; i < al.length; i++) if (al[i] > 0) al[i] = al[i] < 0.02 ? 0 : al[i] * ALARM_DECAY;
     }
+    this.water.step(this.tick, this.daylight() > 0.5 && !this.raining());
+    this.dropBlocks();
     this.settleGranular();
     this.tick++;
     if (this.tick % FIELD_INTERVAL === 0) this.updateFields();
@@ -297,6 +323,8 @@ export class Simulation {
 
   hasGrip(x: number, y: number): boolean {
     const w = this.world;
+    // Ants swim: water holds them up.
+    if (w.get(x, y) === Material.Water) return true;
     for (const [dx, dy] of DIRS) if (w.solidAt(x + dx, y + dy)) return true;
     return false;
   }
@@ -464,6 +492,7 @@ export class Simulation {
     if (id < 0) return -1;
     this.antGrid[this.idx(x, y)]++;
     this.layCooldown[id] = 0;
+    this.fallFrom[id] = -1;
     this.ants.born[id] = this.tick;
     this.ants.task[id] = this.pickTask(caste, 0);
     return id;
@@ -537,6 +566,7 @@ export class Simulation {
   private updateAnt(id: number, input: AntInput): void {
     const a = this.ants;
     const w = this.world;
+    if (id === this.held) return;
 
     if (input.moveX || input.moveY) {
       a.aimX[id] = input.moveX;
@@ -578,8 +608,27 @@ export class Simulation {
       }
     }
 
+    // In water ants float up towards the air, and drown if they stay under too long.
+    if (w.get(a.x[id], a.y[id]) === Material.Water) {
+      this.fallFrom[id] = -1;
+      const x = a.x[id];
+      const y = a.y[id];
+      const above = w.get(x, y - 1);
+      if (above === Material.Water && this.tick % DROWN_TICKS === id % DROWN_TICKS && --a.hp[id] <= 0) {
+        this.stats.drowned++;
+        this.killAnt(id);
+        return;
+      }
+      if ((above === Material.Water || above === Material.Air) && this.tick % 3 === id % 3 && this.antsAt(x, y - 1) < MAX_ANTS_PER_CELL) {
+        this.moveAnt(id, x, y - 1);
+        this.resetDig(id);
+        return;
+      }
+    }
+
     // Falling: ants with nothing to hold drop one cell per tick.
     if (!this.hasGrip(a.x[id], a.y[id])) {
+      if (this.fallFrom[id] < 0) this.fallFrom[id] = a.y[id];
       const nx = a.x[id];
       const ny = a.y[id] + 1;
       if (!w.solidAt(nx, ny) && this.antsAt(nx, ny) < MAX_ANTS_PER_CELL && this.enemyAt(nx, ny) < 0) {
@@ -587,6 +636,20 @@ export class Simulation {
       }
       this.resetDig(id);
       return;
+    }
+
+    // Landing: a long drop hurts.
+    if (this.fallFrom[id] >= 0) {
+      const drop = a.y[id] - this.fallFrom[id];
+      this.fallFrom[id] = -1;
+      if (drop > SAFE_FALL) {
+        a.hp[id] -= Math.ceil((drop - SAFE_FALL) / 2);
+        if (a.hp[id] <= 0) {
+          this.stats.fell++;
+          this.killAnt(id);
+          return;
+        }
+      }
     }
 
     if (a.cooldown[id] > 0) a.cooldown[id]--;
@@ -1002,6 +1065,162 @@ export class Simulation {
 
   // ---- World -----------------------------------------------------------------
 
+  /**
+   * The hand: picks up an ant right under the pointer, else the block of
+   * ground there, else an ant close by. Bedrock stays put.
+   */
+  grab(x: number, y: number): 'ant' | 'block' | null {
+    this.dropHeld();
+    if (this.grabAnt(x, y, 1.5) >= 0) return 'ant';
+    const w = this.world;
+    if (w.inBounds(x, y) && w.solidAt(x, y) && y < w.height - 3) {
+      const i = w.index(x, y);
+      this.heldCell = i;
+      this.fallingBlocks.delete(i);
+      if (w.get(x, y) === Material.Food) this.foodOnMap--;
+      this.wakeAround(x, y);
+      return 'block';
+    }
+    return this.grabAnt(x, y, 3) >= 0 ? 'ant' : null;
+  }
+
+  /** A held block can move into open air or water, but not onto ants or brood. */
+  private blockCanEnter(x: number, y: number): boolean {
+    const m = this.world.get(x, y);
+    return (m === Material.Air || m === Material.Water) && this.free(x, y);
+  }
+
+  /** Moves a block of ground one cell, swapping places with any water there. */
+  private shiftBlock(from: number, x: number, y: number): number {
+    const w = this.world;
+    const m = w.cells[from] as Material;
+    const fx = from % w.width;
+    const fy = Math.floor(from / w.width);
+    const to = w.index(x, y);
+    const wet = w.get(x, y) === Material.Water;
+    w.set(fx, fy, wet ? Material.Water : Material.Air);
+    w.set(x, y, m);
+    if (wet) {
+      this.water.forget(to);
+      this.water.track(from);
+    }
+    this.wakeAround(fx, fy);
+    return to;
+  }
+
+  /** Falling blocks drop a cell per tick and crush the ants they land on. */
+  private dropBlocks(): void {
+    if (this.fallingBlocks.size === 0) return;
+    const w = this.world;
+    const a = this.ants;
+    const order = [...this.fallingBlocks].sort((p, q) => q - p);
+    this.fallingBlocks.clear();
+    for (const i of order) {
+      if (!w.solidAt(i % w.width, Math.floor(i / w.width))) continue;
+      const x = i % w.width;
+      const y = Math.floor(i / w.width);
+      const below = w.get(x, y + 1);
+      if ((below !== Material.Air && below !== Material.Water) || this.broodAt(x, y + 1) || this.enemyAt(x, y + 1) >= 0) {
+        if (MATERIALS[w.get(x, y) as Material].granular) this.settling.add(i);
+        if (w.get(x, y) === Material.Food) this.foodOnMap++;
+        continue;
+      }
+      // Ants under the block are hit; survivors are knocked up into the space it left.
+      if (this.antsAt(x, y + 1) > 0) {
+        for (let id = 0; id < a.count; id++) {
+          if (!a.alive[id] || a.x[id] !== x || a.y[id] !== y + 1) continue;
+          a.hp[id] -= CRUSH;
+          if (a.hp[id] <= 0) {
+            this.stats.fell++;
+            this.killAnt(id, false);
+          }
+        }
+      }
+      const to = this.shiftBlock(i, x, y + 1);
+      for (let id = 0; id < a.count; id++) {
+        if (a.alive[id] && a.x[id] === x && a.y[id] === y + 1) this.moveAnt(id, x, y);
+      }
+      this.fallingBlocks.add(to);
+    }
+  }
+
+  /** Picks up the living ant nearest to a cell, within `reach`. Returns its id or -1. */
+  grabAnt(x: number, y: number, reach = 3): number {
+    const a = this.ants;
+    let best = -1;
+    let bestD = reach + 0.5;
+    for (let i = 0; i < a.count; i++) {
+      if (!a.alive[i] || a.flying[i]) continue;
+      const d = Math.hypot(a.x[i] - x, a.y[i] - y);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    this.held = best;
+    if (best >= 0) {
+      this.resetDig(best);
+      this.moveHeld(x, y);
+    }
+    return best;
+  }
+
+  /** Carries what the hand holds to a cell; it cannot be pushed into solid ground. */
+  moveHeld(x: number, y: number): void {
+    if (this.heldCell >= 0) {
+      const w = this.world;
+      let i = this.heldCell;
+      const fx = i % w.width;
+      const fy = Math.floor(i / w.width);
+      const steps = Math.max(Math.abs(x - fx), Math.abs(y - fy));
+      for (let k = 1; k <= steps; k++) {
+        const cx = Math.round(fx + ((x - fx) * k) / steps);
+        const cy = Math.round(fy + ((y - fy) * k) / steps);
+        if (cx === i % w.width && cy === Math.floor(i / w.width)) continue;
+        if (!this.blockCanEnter(cx, cy)) break;
+        i = this.shiftBlock(i, cx, cy);
+      }
+      this.heldCell = i;
+      return;
+    }
+    const id = this.held;
+    if (id < 0 || !this.ants.alive[id]) {
+      this.held = -1;
+      return;
+    }
+    const w = this.world;
+    const a = this.ants;
+    // Step along the line towards the pointer and stop at the first wall.
+    const steps = Math.max(Math.abs(x - a.x[id]), Math.abs(y - a.y[id]));
+    const fx = a.x[id];
+    const fy = a.y[id];
+    for (let k = 1; k <= steps; k++) {
+      const cx = Math.round(fx + ((x - fx) * k) / steps);
+      const cy = Math.round(fy + ((y - fy) * k) / steps);
+      if (!w.inBounds(cx, cy) || w.solidAt(cx, cy)) break;
+      this.moveAnt(id, cx, cy);
+    }
+    this.fallFrom[id] = -1;
+  }
+
+  /** Lets go of the held ant. It falls from where it was dropped. */
+  dropHeld(): void {
+    if (this.heldCell >= 0) {
+      this.fallingBlocks.add(this.heldCell);
+      this.heldCell = -1;
+    }
+    const id = this.held;
+    this.held = -1;
+    if (id >= 0 && this.ants.alive[id] && !this.hasGrip(this.ants.x[id], this.ants.y[id])) {
+      this.fallFrom[id] = this.ants.y[id];
+    }
+  }
+
+  /** Pours water into the open cells of a disc (sky or tunnels). Returns the cells filled. */
+  pourWater(x: number, y: number, radius: number): number {
+    return this.water.pour(x, y, radius);
+  }
+
   /** No creature, egg or solid cell here. */
   free(x: number, y: number): boolean {
     return (
@@ -1223,8 +1442,14 @@ export class Simulation {
         }
       }
       if (!to) continue;
-      w.set(x, y, Material.Air);
+      // Grains sink through water and push it up into the space they left.
+      const displaced = w.get(to[0], to[1]) === Material.Water;
+      w.set(x, y, displaced ? Material.Water : Material.Air);
       w.set(to[0], to[1], m);
+      if (displaced) {
+        this.water.forget(w.index(to[0], to[1]));
+        this.water.track(i);
+      }
       this.settling.add(w.index(to[0], to[1]));
       this.wakeAround(x, y);
     }

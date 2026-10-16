@@ -57,7 +57,40 @@ body {
   top: 96px;
 }
 
+#tools {
+  top: calc(58px + env(safe-area-inset-top, 0px));
+  left: auto;
+  right: calc(10px + env(safe-area-inset-right, 0px));
+  pointer-events: auto;
+  width: 260px;
+}
+
+#tools h1 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.tool-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.tool-row span {
+  display: flex;
+  gap: 6px;
+}
+
+#tools .hint {
+  margin: 0;
+  opacity: 0.8;
+}
+
 #help[hidden],
+#tools[hidden],
 #details[hidden],
 #alerts[hidden] {
   display: none;
@@ -140,6 +173,7 @@ body {
   box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
   cursor: pointer;
   touch-action: none;
+  white-space: nowrap;
 }
 
 .tool.on {
@@ -222,6 +256,12 @@ body.touch .panel {
     font-size: 12px;
     min-width: 0;
     padding: 6px 7px;
+  }
+
+  #tools {
+    top: auto;
+    width: auto;
+    bottom: calc(64px + env(safe-area-inset-bottom, 0px));
   }
 
   body.controlling .toolbar {

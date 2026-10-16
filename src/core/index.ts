@@ -9,3 +9,4 @@ export * from './sim';
 export * from './world';
 export * from './worldgen';
 export * from './nestplan';
+export * from './water';
