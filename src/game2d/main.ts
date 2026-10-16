@@ -1,3 +1,5 @@
+// Lets PixiJS run on pages with a strict Content Security Policy (no eval).
+import 'pixi.js/unsafe-eval';
 import { Application } from 'pixi.js';
 import { Item, Simulation, TICK_RATE } from '../core';
 import { Controls } from './controls';
