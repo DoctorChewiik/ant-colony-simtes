@@ -7,6 +7,8 @@ export enum Material {
   Rock = 4,
   /** Soil an ant has dug and dropped. It falls and piles up like sand. */
   Loose = 5,
+  /** A seed or crumb lying in the world; ants pick it up and eat it. */
+  Food = 6,
 }
 
 export interface MaterialInfo {
@@ -25,6 +27,7 @@ export const MATERIALS: Record<Material, MaterialInfo> = {
   [Material.Clay]: { name: 'clay', solid: true, digTicks: 24, granular: false },
   [Material.Rock]: { name: 'rock', solid: true, digTicks: 0, granular: false },
   [Material.Loose]: { name: 'loose soil', solid: true, digTicks: 3, granular: true },
+  [Material.Food]: { name: 'food', solid: true, digTicks: 2, granular: true },
 };
 
 export function isSolid(m: Material): boolean {

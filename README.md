@@ -23,7 +23,10 @@ npm run build:single # un seul fichier HTML jouable hors ligne dans dist-single/
 | --- | --- |
 | ZQSD / WASD / flèches | Se déplacer et viser |
 | Espace maintenu | Creuser la case visée |
-| Espace ou E en portant | Déposer la boulette de terre |
+| E | Déposer ce que la fourmi porte |
+| F | Manger la nourriture portée (+3 à la réserve) |
+| 1 / 2 / 3 / 4 | Pondre un œuf d'ouvrière, de soldat, de reine ou de mâle (la reine seulement) |
+| T | Choisir ce que devient la terre creusée : remonte à la surface, disparaît, ou à porter soi-même |
 | Clic gauche sur une case voisine | Creuser (maintenu) ou déposer |
 | Molette | Zoom |
 | P / Échap | Pause |

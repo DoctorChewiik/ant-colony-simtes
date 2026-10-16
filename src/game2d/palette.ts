@@ -30,6 +30,11 @@ const SHADES: Record<Material, Rgb[]> = {
     [150, 107, 69],
     [131, 93, 60],
   ],
+  [Material.Food]: [
+    [214, 170, 72],
+    [196, 150, 60],
+    [230, 190, 90],
+  ],
 };
 
 const SKY_TOP: Rgb = [120, 178, 222];

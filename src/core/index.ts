@@ -1,4 +1,5 @@
 export * from './ants';
+export * from './brood';
 export * from './input';
 export * from './materials';
 export * from './rng';

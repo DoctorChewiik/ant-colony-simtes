@@ -1,18 +1,39 @@
 // Lets PixiJS run on pages with a strict Content Security Policy (no eval).
 import 'pixi.js/unsafe-eval';
 import { Application } from 'pixi.js';
-import { Item, Simulation, TICK_RATE } from '../core';
+import { Caste, DigDisposal, Item, Simulation, Stage, TICK_RATE } from '../core';
 import { Controls } from './controls';
 import { Renderer } from './renderer';
+import { isTouchDevice, mountTouchControls } from './touch';
 
 const WORLD = { width: 320, height: 200 };
 const TICK_MS = 1000 / TICK_RATE;
 const MAX_STEPS_PER_FRAME = 5;
 
+const DISPOSAL_NAMES: Record<DigDisposal, string> = {
+  [DigDisposal.Surface]: 'remonte à la surface',
+  [DigDisposal.Vanish]: 'disparaît',
+  [DigDisposal.Carry]: 'à porter soi-même',
+};
+
+const CARRIED_NAMES: Record<Item, string> = {
+  [Item.None]: 'rien',
+  [Item.Soil]: 'une boulette de terre',
+  [Item.Food]: 'de la nourriture',
+};
+
 async function start() {
   const host = document.getElementById('game')!;
   const app = new Application();
-  await app.init({ resizeTo: window, background: '#1a120c', antialias: false, roundPixels: true });
+  await app.init({
+    resizeTo: window,
+    background: '#1a120c',
+    antialias: false,
+    roundPixels: true,
+    // Sharp pixels on high-density phone screens, capped to stay fast.
+    resolution: Math.min(window.devicePixelRatio || 1, 2),
+    autoDensity: true,
+  });
   host.appendChild(app.canvas);
 
   const controls = new Controls(app.canvas);
@@ -29,20 +50,40 @@ async function start() {
   const newWorld = () => {
     app.stage.removeChildren();
     seed = Math.floor(Math.random() * 1e9);
+    const disposal = sim.digDisposal;
     sim = new Simulation({ seed, ...WORLD });
+    sim.digDisposal = disposal;
     const zoom = renderer.zoom;
     renderer = new Renderer(app, sim);
     renderer.zoom = zoom;
   };
 
+  const togglePause = () => {
+    paused = !paused;
+    pausedLabel.hidden = !paused;
+  };
+  const toggleDisposal = () => (sim.digDisposal = (sim.digDisposal + 1) % 3);
+  const toggleHelp = () => (help.hidden = !help.hidden);
+
   controls.onZoom = (f) => renderer.zoomBy(f);
   controls.onKey = (code) => {
-    if (code === 'KeyP' || code === 'Escape') {
-      paused = !paused;
-      pausedLabel.hidden = !paused;
-    } else if (code === 'KeyN') newWorld();
-    else if (code === 'KeyH') help.hidden = !help.hidden;
+    if (code === 'KeyP' || code === 'Escape') togglePause();
+    else if (code === 'KeyN') newWorld();
+    else if (code === 'KeyT') toggleDisposal();
+    else if (code === 'KeyH') toggleHelp();
   };
+
+  if (isTouchDevice()) {
+    document.body.classList.add('touch');
+    help.hidden = true;
+    mountTouchControls(document.getElementById('hud')!, controls, {
+      toggleDisposal,
+      togglePause,
+      toggleHelp,
+      zoom: (f) => renderer.zoomBy(f),
+    });
+  }
+  let lastStatus = '';
 
   const mouseCell = () => (controls.mouse ? renderer.screenToCell(controls.mouse.x, controls.mouse.y) : null);
 
@@ -67,11 +108,22 @@ async function start() {
     renderer.render(ticker.deltaMS, aimed);
 
     const depth = Math.max(0, sim.ants.y[p] - sim.world.surface[sim.ants.x[p]]);
-    status.textContent =
-      `Porte : ${sim.ants.carrying[p] === Item.Soil ? 'une boulette de terre' : 'rien'}` +
-      ` · Profondeur : ${depth}` +
-      ` · Creusé : ${sim.stats.dug}` +
-      ` · Graine : ${seed}`;
+    const castes = [0, 0, 0, 0];
+    for (let i = 0; i < sim.ants.count; i++) castes[sim.ants.caste[i]]++;
+    const stages = [0, 0, 0];
+    for (let i = 0; i < sim.brood.count; i++) stages[sim.brood.stage[i]]++;
+    const text = [
+      `<b>Réserve de nourriture : ${sim.colony.food}</b> · Porte : ${CARRIED_NAMES[sim.ants.carrying[p] as Item]}`,
+      `Colonie : ${castes[Caste.Worker]} ouvrières · ${castes[Caste.Soldier]} soldats · ` +
+        `${castes[Caste.Queen]} reines · ${castes[Caste.Male]} mâles`,
+      `Couvain : ${stages[Stage.Egg]} œufs · ${stages[Stage.Larva]} larves · ${stages[Stage.Pupa]} nymphes`,
+      `Terre creusée : ${DISPOSAL_NAMES[sim.digDisposal]} · Profondeur : ${depth} · Graine : ${seed}`,
+    ].join('<br>');
+    // Only touch the page when the numbers change; rewriting it every frame costs smoothness.
+    if (text !== lastStatus) {
+      status.innerHTML = text;
+      lastStatus = text;
+    }
   });
 }
 

@@ -80,3 +80,140 @@ kbd {
   color: var(--accent);
   text-shadow: 0 2px 0 #000;
 }
+
+/* The game canvas handles its own touch gestures (pinch zoom, dig). */
+#game canvas {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.touch-only {
+  display: none;
+}
+
+body.touch .touch-only {
+  display: block;
+}
+
+/* Phones: status on top, compact, controls along the bottom. */
+body.touch .panel {
+  font-size: 11px;
+  max-width: calc(100vw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+}
+
+body.touch #status {
+  bottom: auto;
+  top: calc(8px + env(safe-area-inset-top, 0px));
+  left: calc(8px + env(safe-area-inset-left, 0px));
+  right: 132px;
+  max-width: none;
+  padding: 6px 8px;
+}
+
+body.touch #help {
+  top: calc(96px + env(safe-area-inset-top, 0px));
+  left: calc(8px + env(safe-area-inset-left, 0px));
+  right: calc(8px + env(safe-area-inset-right, 0px));
+  max-width: none;
+}
+
+#touch {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+#touch > * {
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.joystick {
+  position: absolute;
+  left: calc(20px + env(safe-area-inset-left, 0px));
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  background: rgba(20, 14, 10, 0.45);
+  border: 2px solid rgba(243, 233, 220, 0.35);
+  display: grid;
+  place-items: center;
+}
+
+.knob {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(243, 233, 220, 0.75);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.4);
+}
+
+.actions {
+  position: absolute;
+  right: calc(16px + env(safe-area-inset-right, 0px));
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 8px;
+  justify-items: stretch;
+}
+
+.touch-btn {
+  font: inherit;
+  font-size: 13px;
+  color: var(--panel-text);
+  background: rgba(20, 14, 10, 0.72);
+  border: 2px solid rgba(243, 233, 220, 0.35);
+  border-radius: 10px;
+  min-width: 76px;
+  min-height: 44px;
+  padding: 6px 10px;
+}
+
+.touch-btn:active,
+.touch-btn.held {
+  background: rgba(232, 176, 74, 0.85);
+  color: #1a120c;
+}
+
+.touch-btn.big {
+  grid-column: span 2;
+  min-height: 64px;
+  font-size: 16px;
+  font-weight: bold;
+  border-color: var(--accent);
+}
+
+.lay-menu {
+  position: absolute;
+  right: calc(16px + env(safe-area-inset-right, 0px));
+  bottom: calc(220px + env(safe-area-inset-bottom, 0px));
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 8px;
+}
+
+.lay-menu[hidden] {
+  display: none;
+}
+
+.top-buttons {
+  position: absolute;
+  top: calc(8px + env(safe-area-inset-top, 0px));
+  right: calc(8px + env(safe-area-inset-right, 0px));
+  display: grid;
+  grid-template-columns: repeat(2, 56px);
+  gap: 6px;
+}
+
+.touch-btn.small {
+  min-width: 56px;
+  min-height: 40px;
+  padding: 4px;
+  font-size: 16px;
+}

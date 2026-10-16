@@ -2,7 +2,7 @@
 <html lang="fr">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Fourmilière</title>
     <link rel="stylesheet" href="/src/game2d/style.css" />
   </head>
@@ -11,9 +11,13 @@
     <div id="hud">
       <div class="panel" id="help">
         <h1>Fourmilière</h1>
+        <p class="touch-only">Téléphone : joystick à gauche pour bouger, boutons à droite, deux doigts pour zoomer, touche une case voisine pour la creuser.</p>
         <p><kbd>ZQSD</kbd> / <kbd>WASD</kbd> / flèches : se déplacer et viser</p>
-        <p><kbd>Espace</kbd> maintenu : creuser · appuyé en portant : déposer</p>
+        <p><kbd>Espace</kbd> maintenu : creuser ou ramasser · <kbd>E</kbd> : déposer ce que tu portes</p>
         <p>Souris : clic maintenu sur une case voisine pour creuser, clic pour déposer</p>
+        <p><kbd>F</kbd> : manger la nourriture portée (+3 réserve)</p>
+        <p>Pondre un œuf : <kbd>1</kbd> ouvrière (1) · <kbd>2</kbd> soldat (2) · <kbd>3</kbd> reine (4) · <kbd>4</kbd> mâle (2)</p>
+        <p><kbd>T</kbd> : terre creusée (remonte, disparaît, à porter)</p>
         <p><kbd>Molette</kbd> : zoom · <kbd>P</kbd> : pause · <kbd>N</kbd> : nouveau monde · <kbd>H</kbd> : cacher l'aide</p>
       </div>
       <div class="panel" id="status"></div>
