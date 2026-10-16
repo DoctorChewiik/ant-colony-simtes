@@ -1,7 +1,7 @@
 // Lets PixiJS run on pages with a strict Content Security Policy (no eval).
 import 'pixi.js/unsafe-eval';
 import { Application } from 'pixi.js';
-import { Caste, DigDisposal, Item, Simulation, Stage, TICK_RATE } from '../core';
+import { Caste, DigDisposal, Item, Simulation, Stage, TICK_RATE, Task } from '../core';
 import { Controls } from './controls';
 import { Renderer } from './renderer';
 import { isTouchDevice, mountTouchControls } from './touch';
@@ -64,6 +64,7 @@ async function start() {
   };
   const toggleDisposal = () => (sim.digDisposal = (sim.digDisposal + 1) % 3);
   const toggleHelp = () => (help.hidden = !help.hidden);
+  const toggleScents = () => (renderer.showScents = !renderer.showScents);
 
   controls.onZoom = (f) => renderer.zoomBy(f);
   controls.onKey = (code) => {
@@ -71,6 +72,7 @@ async function start() {
     else if (code === 'KeyN') newWorld();
     else if (code === 'KeyT') toggleDisposal();
     else if (code === 'KeyH') toggleHelp();
+    else if (code === 'KeyV') toggleScents();
   };
 
   if (isTouchDevice()) {
@@ -80,10 +82,16 @@ async function start() {
       toggleDisposal,
       togglePause,
       toggleHelp,
+      toggleScents,
       zoom: (f) => renderer.zoomBy(f),
     });
   }
   let lastStatus = '';
+
+  // `?debug` exposes the simulation in the browser console, for testing scenes by hand.
+  if (new URLSearchParams(location.search).has('debug')) {
+    (window as unknown as { fourmiliere: unknown }).fourmiliere = { get sim() { return sim; } };
+  }
 
   const mouseCell = () => (controls.mouse ? renderer.screenToCell(controls.mouse.x, controls.mouse.y) : null);
 
@@ -109,16 +117,33 @@ async function start() {
 
     const depth = Math.max(0, sim.ants.y[p] - sim.world.surface[sim.ants.x[p]]);
     const castes = [0, 0, 0, 0];
-    for (let i = 0; i < sim.ants.count; i++) castes[sim.ants.caste[i]]++;
+    const tasks = [0, 0, 0, 0, 0];
+    for (let i = 0; i < sim.ants.count; i++) {
+      if (!sim.ants.alive[i] || i === p) continue;
+      castes[sim.ants.caste[i]]++;
+      tasks[sim.ants.task[i]]++;
+    }
     const stages = [0, 0, 0];
     for (let i = 0; i < sim.brood.count; i++) stages[sim.brood.stage[i]]++;
+    const spiders = sim.enemies.living;
     const text = [
+      sim.gameOver
+        ? '<b class="alert">La reine est morte. Appuie sur N pour une nouvelle colonie.</b>'
+        : sim.alarmActive()
+          ? `<b class="alert">Alerte ! La colonie se défend${spiders ? ` (${spiders} araignée${spiders > 1 ? 's' : ''})` : ''}</b>`
+          : spiders
+            ? `${spiders} araignée${spiders > 1 ? 's' : ''} dans les environs`
+            : '',
       `<b>Réserve de nourriture : ${sim.colony.food}</b> · Porte : ${CARRIED_NAMES[sim.ants.carrying[p] as Item]}`,
       `Colonie : ${castes[Caste.Worker]} ouvrières · ${castes[Caste.Soldier]} soldats · ` +
         `${castes[Caste.Queen]} reines · ${castes[Caste.Male]} mâles`,
+      `Au travail : ${tasks[Task.Forage]} fourragent · ${tasks[Task.Dig]} creusent · ` +
+        `${tasks[Task.Nurse]} soignent · ${tasks[Task.Guard]} gardent`,
       `Couvain : ${stages[Stage.Egg]} œufs · ${stages[Stage.Larva]} larves · ${stages[Stage.Pupa]} nymphes`,
       `Terre creusée : ${DISPOSAL_NAMES[sim.digDisposal]} · Profondeur : ${depth} · Graine : ${seed}`,
-    ].join('<br>');
+    ]
+      .filter(Boolean)
+      .join('<br>');
     // Only touch the page when the numbers change; rewriting it every frame costs smoothness.
     if (text !== lastStatus) {
       status.innerHTML = text;

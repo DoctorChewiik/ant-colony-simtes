@@ -8,6 +8,7 @@ export interface TouchActions {
   toggleDisposal: () => void;
   togglePause: () => void;
   toggleHelp: () => void;
+  toggleScents: () => void;
   zoom: (factor: number) => void;
 }
 
@@ -137,7 +138,9 @@ export function mountTouchControls(root: HTMLElement, controls: Controls, action
   onTap(pause, actions.togglePause);
   const help = button('?', 'small', "Afficher l'aide");
   onTap(help, actions.toggleHelp);
-  top.append(zoomIn, zoomOut, pause, help);
+  const scents = button('Odeurs', 'small wide', 'Voir les phéromones');
+  onTap(scents, actions.toggleScents);
+  top.append(zoomIn, zoomOut, pause, help, scents);
   ui.appendChild(top);
 }
 

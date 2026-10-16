@@ -217,3 +217,12 @@ body.touch #help {
   padding: 4px;
   font-size: 16px;
 }
+
+.touch-btn.wide {
+  grid-column: span 2;
+  font-size: 13px;
+}
+
+.alert {
+  color: #ff8a6a;
+}

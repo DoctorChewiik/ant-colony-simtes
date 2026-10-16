@@ -40,10 +40,10 @@ export const CASTE_LOOKS: Record<Caste, CasteLook> = {
   },
 };
 
-function frameTexture(rows: string[], colors: Record<string, string>): Texture {
+function frameTexture(rows: string[], colors: Record<string, string>, w = ANT_W, h = ANT_H): Texture {
   const canvas = document.createElement('canvas');
-  canvas.width = ANT_W;
-  canvas.height = ANT_H;
+  canvas.width = w;
+  canvas.height = h;
   const ctx = canvas.getContext('2d')!;
   rows.forEach((row, y) => {
     [...row].forEach((ch, x) => {
@@ -67,4 +67,35 @@ export function makeAntFrames(): Record<Caste, Texture[]> {
     out[caste] = LEGS.map((legs) => frameTexture([look.wings ? WINGS : '..........', ...BODY, legs], look.colors));
   }
   return out;
+}
+
+/** Spider sprite: 3 cells wide, 1.5 cells tall, facing right. */
+export const SPIDER_W = 15;
+export const SPIDER_H = 8;
+
+const SPIDER_BODY = [
+  '...............',
+  '....bbbb.......',
+  '...bbbbbbcc.e..',
+  '..bbbbbbbcccee.',
+  '...bbbbbbcc.e..',
+  '....bbbb.......',
+];
+const SPIDER_LEGS = [
+  ['.l.l..l.l.l....', 'l.l..l.l..l....'],
+  ['l.l..l.l..l....', '.l.l..l.l.l....'],
+];
+const SPIDER_COLORS: Record<string, string> = {
+  b: '#2b2230',
+  c: '#3d3044',
+  e: '#c0392b',
+  l: '#1c161f',
+};
+
+export function makeSpiderFrames(): Texture[] {
+  return SPIDER_LEGS.map(([a, b]) => {
+    const rows = [...SPIDER_BODY];
+    rows[0] = a;
+    return frameTexture([...rows, b, a], SPIDER_COLORS, SPIDER_W, SPIDER_H);
+  });
 }

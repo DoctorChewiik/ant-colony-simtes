@@ -7,7 +7,10 @@ import {
   IDLE,
   Item,
   Material,
+  EnemyKind,
+  MAX_ANTS_PER_CELL,
   STAGE_TICKS,
+  Task,
   STARTING_FOOD,
   Simulation,
   Stage,
@@ -237,5 +240,120 @@ describe('food', () => {
     sim.step(input({ eat: true }));
     expect(ants.carrying[0]).toBe(Item.None);
     expect(sim.colony.food).toBe(STARTING_FOOD + FOOD_VALUE);
+  });
+});
+
+describe('colony life', () => {
+  /** A founded colony: the queen has dug a short shaft and the nest heart is at its bottom. */
+  function colony(seed = 42) {
+    const sim = new Simulation({ ...opts, seed, width: 160 });
+    sim.digDisposal = DigDisposal.Vanish;
+    for (let i = 0; i < 4; i++) {
+      sim.step(input({ moveY: 1 }));
+      run(sim, input({ dig: true }), 25);
+      run(sim, input({ moveY: 1 }), 4);
+    }
+    sim.colony.food = 50;
+    sim.step(input({ lay: Caste.Worker }));
+    return sim;
+  }
+
+  function addAnts(sim: Simulation, n: number, caste: Caste, task?: Task) {
+    const { nestX, nestY } = sim.colony;
+    const ids: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const id = sim.spawnAnt(nestX, nestY, caste);
+      if (task !== undefined) sim.ants.task[id] = task;
+      ids.push(id);
+    }
+    return ids;
+  }
+
+  it('lets a few ants share a cell so groups swarm', () => {
+    const sim = colony();
+    const { nestX, nestY } = sim.colony;
+    addAnts(sim, MAX_ANTS_PER_CELL - 1, Caste.Worker, Task.Nurse);
+    expect(sim.antsAt(nestX, nestY)).toBe(MAX_ANTS_PER_CELL);
+    expect(sim.canStand(nestX, nestY)).toBe(false);
+  });
+
+  it('foragers find food on the surface and bring it home', () => {
+    const sim = colony();
+    addAnts(sim, 8, Caste.Worker, Task.Forage);
+    const { nestX } = sim.colony;
+    for (const dx of [-14, -10, 9, 13]) {
+      const x = nestX + dx;
+      sim.world.set(x, sim.topSolid(x) - 1, Material.Food);
+      sim.foodOnMap++;
+    }
+    const before = sim.colony.food;
+    run(sim, IDLE, 3000);
+    expect(sim.stats.delivered).toBeGreaterThan(0);
+    expect(sim.colony.food).toBeGreaterThan(before);
+  });
+
+  it('diggers enlarge the nest around its heart', () => {
+    const sim = colony();
+    const dugBefore = sim.stats.dug;
+    addAnts(sim, 6, Caste.Worker, Task.Dig);
+    run(sim, IDLE, 2400);
+    expect(sim.stats.dug - dugBefore).toBeGreaterThan(15);
+    // Everything they opened is underground, within the nest radius.
+    const { nestX, nestY } = sim.colony;
+    const radius = sim.nestRadius() + 1;
+    for (let y = 0; y < sim.world.height; y++) {
+      for (let x = 0; x < sim.world.width; x++) {
+        if (sim.world.get(x, y) !== Material.Air || y <= sim.world.surface[x]) continue;
+        expect(Math.hypot(x - nestX, y - nestY)).toBeLessThanOrEqual(radius + 1);
+      }
+    }
+  });
+
+  it('ants raise the alarm and gang up to kill a spider', () => {
+    const sim = colony();
+    addAnts(sim, 3, Caste.Soldier);
+    addAnts(sim, 6, Caste.Worker, Task.Nurse);
+    const { nestX } = sim.colony;
+    const sx = nestX + 6;
+    const spider = sim.spawnEnemy(sx, sim.topSolid(sx) - 1, EnemyKind.Spider);
+    expect(spider).toBeGreaterThanOrEqual(0);
+    let alarmed = false;
+    for (let t = 0; t < 1500 && sim.enemies.alive[spider]; t++) {
+      sim.step(IDLE);
+      if (sim.alarm.some((v) => v > 0.5)) alarmed = true;
+    }
+    expect(alarmed).toBe(true);
+    expect(sim.enemies.alive[spider]).toBe(0);
+    expect(sim.stats.enemiesKilled).toBe(1);
+    // The spider's body became food.
+    expect(sim.foodOnMap).toBeGreaterThan(0);
+  });
+
+  it('a spider kills a lone ant and its slot is reused', () => {
+    const sim = colony();
+    const x = 10;
+    const y = sim.topSolid(x) - 1;
+    const victim = sim.spawnAnt(x, y, Caste.Worker);
+    sim.ants.task[victim] = Task.Idle;
+    sim.spawnEnemy(x + 1, sim.topSolid(x + 1) - 1, EnemyKind.Spider);
+    const gen = sim.ants.gen[victim];
+    for (let t = 0; t < 600 && sim.ants.alive[victim]; t++) sim.step(IDLE);
+    expect(sim.ants.alive[victim]).toBe(0);
+    expect(sim.stats.antsLost).toBe(1);
+    const again = sim.spawnAnt(sim.colony.nestX, sim.colony.nestY, Caste.Worker);
+    expect(again).toBe(victim);
+    expect(sim.ants.gen[again]).toBe(gen + 1);
+  });
+
+  it('a whole colony stays deterministic', () => {
+    const a = colony(5);
+    const b = colony(5);
+    for (const sim of [a, b]) {
+      addAnts(sim, 5, Caste.Worker);
+      addAnts(sim, 2, Caste.Soldier);
+      sim.spawnEnemy(30, sim.topSolid(30) - 1, EnemyKind.Spider);
+      run(sim, IDLE, 1500);
+    }
+    expect(a.hash()).toBe(b.hash());
   });
 });

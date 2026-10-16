@@ -1,4 +1,6 @@
+export * from './ai';
 export * from './ants';
+export * from './enemies';
 export * from './brood';
 export * from './input';
 export * from './materials';

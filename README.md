@@ -26,6 +26,7 @@ npm run build:single # un seul fichier HTML jouable hors ligne dans dist-single/
 | E | Déposer ce que la fourmi porte |
 | F | Manger la nourriture portée (+3 à la réserve) |
 | 1 / 2 / 3 / 4 | Pondre un œuf d'ouvrière, de soldat, de reine ou de mâle (la reine seulement) |
+| V | Voir les phéromones : pistes de nourriture en vert, alarme en rouge |
 | T | Choisir ce que devient la terre creusée : remonte à la surface, disparaît, ou à porter soi-même |
 | Clic gauche sur une case voisine | Creuser (maintenu) ou déposer |
 | Molette | Zoom |

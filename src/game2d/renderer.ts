@@ -1,39 +1,63 @@
 import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js';
-import { CASTES, Caste, Item, MATERIALS, Stage, TICK_RATE, type Simulation } from '../core';
-import { ANT_H, ANT_W, CASTE_LOOKS, makeAntFrames } from './antSprite';
+import { CASTES, Caste, ENEMIES, EnemyKind, Item, MATERIALS, Stage, TICK_RATE, hash2, type Simulation } from '../core';
+import { ANT_H, ANT_W, CASTE_LOOKS, SPIDER_H, SPIDER_W, makeAntFrames, makeSpiderFrames } from './antSprite';
 import { cellColor } from './palette';
 
 const MIN_ZOOM = 2;
 const MAX_ZOOM = 32;
+/** Redraw the scent overlay every few frames; it changes slowly. */
+const SCENT_EVERY = 6;
 
-interface AntView {
-  sprite: Sprite;
-  pellet: Graphics;
-  /** Where the ant is drawn, gliding from `from` to its current cell. */
+/** A creature drawn gliding at constant speed from its last cell to its current one. */
+interface Glide {
   pos: { x: number; y: number };
   from: { x: number; y: number };
   cell: { x: number; y: number };
   moveStart: number;
   moveTime: number;
+  gen: number;
+}
+
+interface AntView extends Glide {
+  sprite: Sprite;
+  pellet: Graphics;
   carried: Item;
+  /** Fixed spot inside the cell, so ants sharing a cell spread out into a swarm. */
+  offset: { x: number; y: number };
+  phase: number;
+}
+
+interface EnemyView extends Glide {
+  sprite: Sprite;
 }
 
 /** Draws the simulation as a side-view pixel ant farm. Reads the sim, never changes it. */
 export class Renderer {
   readonly camera = new Container();
   zoom = 14;
+  showScents = false;
   private worldCanvas: HTMLCanvasElement;
   private worldCtx: CanvasRenderingContext2D;
   private worldImage: ImageData;
   private worldTexture: Texture;
+  private scentCanvas: HTMLCanvasElement;
+  private scentCtx: CanvasRenderingContext2D;
+  private scentImage: ImageData;
+  private scentTexture: Texture;
+  private scentSprite: Sprite;
   private antFrames: Record<Caste, Texture[]>;
+  private spiderFrames: Texture[];
   private antLayer = new Container();
+  private enemyLayer = new Container();
   private antViews: AntView[] = [];
+  private enemyViews: EnemyView[] = [];
   private brood = new Graphics();
+  private bars = new Graphics();
   private cursor = new Graphics();
   private camPos = { x: 0, y: 0 };
   /** Milliseconds since the renderer started, for move animations. */
   private time = 0;
+  private frame = 0;
 
   constructor(
     private app: Application,
@@ -51,9 +75,29 @@ export class Renderer {
     this.worldCtx.putImageData(this.worldImage, 0, 0);
     this.worldTexture = Texture.from(this.worldCanvas);
     this.worldTexture.source.scaleMode = 'nearest';
-    this.antFrames = makeAntFrames();
 
-    this.camera.addChild(new Sprite(this.worldTexture), this.brood, this.cursor, this.antLayer);
+    this.scentCanvas = document.createElement('canvas');
+    this.scentCanvas.width = world.width;
+    this.scentCanvas.height = world.height;
+    this.scentCtx = this.scentCanvas.getContext('2d')!;
+    this.scentImage = this.scentCtx.createImageData(world.width, world.height);
+    this.scentTexture = Texture.from(this.scentCanvas);
+    this.scentTexture.source.scaleMode = 'nearest';
+    this.scentSprite = new Sprite(this.scentTexture);
+    this.scentSprite.visible = false;
+
+    this.antFrames = makeAntFrames();
+    this.spiderFrames = makeSpiderFrames();
+
+    this.camera.addChild(
+      new Sprite(this.worldTexture),
+      this.scentSprite,
+      this.brood,
+      this.cursor,
+      this.enemyLayer,
+      this.antLayer,
+      this.bars,
+    );
     app.stage.addChild(this.camera);
 
     const p = sim.player;
@@ -82,7 +126,9 @@ export class Renderer {
 
   render(dt: number, aimed: { x: number; y: number } | null): void {
     const { sim } = this;
-    const { world, ants } = sim;
+    const { world, ants, enemies } = sim;
+    this.time += dt;
+    this.frame++;
 
     const changes = world.drainChanges();
     if (changes.length) {
@@ -90,10 +136,14 @@ export class Renderer {
       this.worldCtx.putImageData(this.worldImage, 0, 0);
       this.worldTexture.source.update();
     }
+    this.scentSprite.visible = this.showScents;
+    if (this.showScents && this.frame % SCENT_EVERY === 0) this.paintScents();
 
-    this.time += dt;
+    this.bars.clear();
     while (this.antViews.length < ants.count) this.addAntView(this.antViews.length);
     for (let id = 0; id < ants.count; id++) this.updateAntView(id);
+    while (this.enemyViews.length < enemies.count) this.addEnemyView();
+    for (let id = 0; id < enemies.count; id++) this.updateEnemyView(id);
     this.drawBrood();
 
     // Camera follows the player's ant.
@@ -110,50 +160,93 @@ export class Renderer {
     this.drawCursor(aimed);
   }
 
+  /** Food trails in green, alarm scent in red. */
+  private paintScents(): void {
+    const { trail, alarm } = this.sim;
+    const d = this.scentImage.data;
+    for (let i = 0; i < trail.length; i++) {
+      const t = trail[i];
+      const a = alarm[i];
+      const o = i * 4;
+      if (t < 0.02 && a < 0.02) {
+        d[o + 3] = 0;
+        continue;
+      }
+      d[o] = Math.round(80 + 175 * a);
+      d[o + 1] = Math.round(220 * t * (1 - a));
+      d[o + 2] = 60;
+      d[o + 3] = Math.round(Math.min(1, Math.max(t, a)) * 170);
+    }
+    this.scentCtx.putImageData(this.scentImage, 0, 0);
+    this.scentTexture.source.update();
+  }
+
+  /** Starts or continues a constant-speed glide towards the creature's cell. */
+  private glide(view: Glide, x: number, y: number, gen: number, stepMs: number): void {
+    if (view.gen !== gen) {
+      // A new creature in a reused slot: appear in place.
+      view.gen = gen;
+      view.cell = { x, y };
+      view.pos = { x: x + 0.5, y: y + 0.5 };
+      view.from = { ...view.pos };
+      view.moveTime = 1;
+    } else if (x !== view.cell.x || y !== view.cell.y) {
+      const jump = Math.abs(x - view.cell.x) + Math.abs(y - view.cell.y) > 3;
+      view.from = jump ? { x: x + 0.5, y: y + 0.5 } : { ...view.pos };
+      view.cell = { x, y };
+      view.moveStart = this.time;
+      view.moveTime = stepMs;
+    }
+    const t = Math.min(1, (this.time - view.moveStart) / view.moveTime);
+    view.pos.x = view.from.x + (view.cell.x + 0.5 - view.from.x) * t;
+    view.pos.y = view.from.y + (view.cell.y + 0.5 - view.from.y) * t;
+  }
+
   private addAntView(id: number): void {
-    const { ants } = this.sim;
-    const sprite = new Sprite(this.antFrames[ants.caste[id] as Caste][0]);
+    const sprite = new Sprite(this.antFrames[Caste.Worker][0]);
     sprite.anchor.set(0.5);
     const pellet = new Graphics();
     sprite.addChild(pellet);
     // The player's ant is drawn on top of the others.
     if (id === this.sim.player) this.antLayer.addChild(sprite);
     else this.antLayer.addChildAt(sprite, 0);
-    const at = { x: ants.x[id] + 0.5, y: ants.y[id] + 0.5 };
+    const h = hash2(id, 7);
     this.antViews.push({
       sprite,
       pellet,
-      pos: { ...at },
-      from: { ...at },
-      cell: { x: ants.x[id], y: ants.y[id] },
-      moveStart: this.time,
-      moveTime: 1,
       carried: Item.None,
+      pos: { x: 0, y: 0 },
+      from: { x: 0, y: 0 },
+      cell: { x: 0, y: 0 },
+      moveStart: 0,
+      moveTime: 1,
+      gen: -1,
+      offset: id === this.sim.player ? { x: 0, y: 0 } : { x: ((h & 255) / 255 - 0.5) * 0.6, y: (((h >> 8) & 255) / 255 - 0.5) * 0.3 },
+      phase: ((h >> 16) & 255) / 40,
     });
   }
 
   private updateAntView(id: number): void {
     const { ants } = this.sim;
     const view = this.antViews[id];
+    view.sprite.visible = ants.alive[id] === 1;
+    if (!ants.alive[id]) return;
     const caste = ants.caste[id] as Caste;
-
-    // Glide at constant speed from the last cell to the new one, timed to the
-    // ant's step rate, so a walking ant moves continuously instead of hopping.
-    if (ants.x[id] !== view.cell.x || ants.y[id] !== view.cell.y) {
-      const jump = Math.abs(ants.x[id] - view.cell.x) + Math.abs(ants.y[id] - view.cell.y) > 3;
-      view.from = jump ? { x: ants.x[id] + 0.5, y: ants.y[id] + 0.5 } : { ...view.pos };
-      view.cell = { x: ants.x[id], y: ants.y[id] };
-      view.moveStart = this.time;
-      const ticks = CASTES[caste].stepTicks + (ants.carrying[id] ? 1 : 0);
-      view.moveTime = ((ticks + 1) * 1000) / TICK_RATE;
-    }
-    const t = Math.min(1, (this.time - view.moveStart) / view.moveTime);
-    view.pos.x = view.from.x + (view.cell.x + 0.5 - view.from.x) * t;
-    view.pos.y = view.from.y + (view.cell.y + 0.5 - view.from.y) * t;
+    const ticks = CASTES[caste].stepTicks + (ants.carrying[id] ? 1 : 0);
+    this.glide(view, ants.x[id], ants.y[id], ants.gen[id], ((ticks + 1) * 1000) / TICK_RATE);
 
     const frames = this.antFrames[caste];
     view.sprite.texture = frames[(ants.steps[id] >> 1) % frames.length];
     this.orientAnt(id, view, CASTE_LOOKS[caste].scale);
+
+    // Swarming: crowded ants jostle around their spot instead of sitting still.
+    if (id !== this.sim.player) {
+      const crowd = this.sim.antsAt(ants.x[id], ants.y[id]) > 1 ? 1 : 0.4;
+      const t = this.time / 1000 + view.phase;
+      view.sprite.x += view.offset.x + Math.sin(t * 9) * 0.06 * crowd;
+      view.sprite.y += view.offset.y * crowd + Math.cos(t * 7) * 0.04 * crowd;
+      view.sprite.rotation += Math.sin(t * 5) * 0.15 * crowd;
+    }
 
     const carried = ants.carrying[id] as Item;
     if (carried !== view.carried) {
@@ -165,6 +258,43 @@ export class Renderer {
           .fill(carried === Item.Food ? 0xd6aa48 : 0x8c6440);
       }
     }
+
+    const max = CASTES[caste].maxHp;
+    if (ants.hp[id] < max) this.drawBar(view.sprite.x, view.sprite.y - 0.8, ants.hp[id] / max, 1);
+  }
+
+  private addEnemyView(): void {
+    const sprite = new Sprite(this.spiderFrames[0]);
+    sprite.anchor.set(0.5, 0.7);
+    this.enemyLayer.addChild(sprite);
+    this.enemyViews.push({
+      sprite,
+      pos: { x: 0, y: 0 },
+      from: { x: 0, y: 0 },
+      cell: { x: 0, y: 0 },
+      moveStart: 0,
+      moveTime: 1,
+      gen: -1,
+    });
+  }
+
+  private updateEnemyView(id: number): void {
+    const e = this.sim.enemies;
+    const view = this.enemyViews[id];
+    view.sprite.visible = e.alive[id] === 1;
+    if (!e.alive[id]) return;
+    const info = ENEMIES[e.kind[id] as EnemyKind];
+    this.glide(view, e.x[id], e.y[id], e.gen[id], ((info.stepTicks + 1) * 1000) / TICK_RATE);
+    view.sprite.texture = this.spiderFrames[(e.steps[id] >> 1) % this.spiderFrames.length];
+    view.sprite.scale.set((e.facing[id] * 3) / SPIDER_W, 1.5 / SPIDER_H);
+    view.sprite.position.set(view.pos.x, view.pos.y + 0.5);
+    this.drawBar(view.pos.x, view.pos.y - 1.1, e.hp[id] / info.maxHp, 2);
+  }
+
+  private drawBar(cx: number, y: number, fraction: number, width: number): void {
+    const f = Math.max(0, Math.min(1, fraction));
+    this.bars.rect(cx - width / 2, y, width, 0.16).fill({ color: 0x000000, alpha: 0.6 });
+    this.bars.rect(cx - width / 2, y, width * f, 0.16).fill(f > 0.5 ? 0x6bbf59 : f > 0.25 ? 0xe8b04a : 0xd0453a);
   }
 
   /** Legs toward whatever the ant is gripping: floor, ceiling or wall. */
@@ -220,13 +350,14 @@ export class Renderer {
   private drawCursor(aimed: { x: number; y: number } | null): void {
     const g = this.cursor;
     g.clear();
-    if (!aimed) return;
+    if (!aimed || this.sim.gameOver) return;
     const { ants, world } = this.sim;
     const p = this.sim.player;
     const m = world.get(aimed.x, aimed.y);
     const carrying = ants.carrying[p] !== Item.None;
-    const usable = carrying ? !world.solidAt(aimed.x, aimed.y) : MATERIALS[m].digTicks > 0;
-    const color = usable ? 0xf3e9dc : 0xd0453a;
+    const enemy = this.sim.enemyAt(aimed.x, aimed.y) >= 0;
+    const usable = enemy || (carrying ? !world.solidAt(aimed.x, aimed.y) : MATERIALS[m].digTicks > 0);
+    const color = enemy ? 0xe8b04a : usable ? 0xf3e9dc : 0xd0453a;
     g.rect(aimed.x + 0.05, aimed.y + 0.05, 0.9, 0.9).stroke({ width: 0.1, color, alpha: 0.9 });
     const digTicks = MATERIALS[m].digTicks;
     if (!carrying && digTicks > 0 && ants.digTarget[p] === world.index(aimed.x, aimed.y)) {
