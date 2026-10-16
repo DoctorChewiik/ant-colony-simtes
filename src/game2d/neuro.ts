@@ -23,7 +23,9 @@ const CASTE_NAMES: Record<number, string> = {
   [Caste.Male]: 'Mâle',
 };
 const GOALS: Record<NeuroGoal, string> = {
+  guide: 'suit ta piste guide 🟣',
   food: 'remonte l\'odeur de nourriture',
+  memory: 'retourne là où elle se souvient avoir trouvé à manger',
   home: 'suit l\'odeur du nid',
   air: 'remonte vers l\'air libre',
   explore: 'explore et cherche une odeur',
@@ -127,7 +129,7 @@ export class NeuroAnt {
   }
 
   /** Words for what the ant is up to. */
-  describe(sim: Simulation): { title: string; doing: string } {
+  describe(sim: Simulation): { title: string; doing: string; learned: string } {
     const a = sim.ants;
     const id = this.id;
     const caste = a.caste[id] as Caste;
@@ -143,7 +145,12 @@ export class NeuroAnt {
     else if (a.carrying[id] === Item.Brood) doing = 'porte du couvain';
     else if (a.carrying[id] === Item.Corpse) doing = 'emporte une fourmi morte';
     else doing = GOALS[this.brain!.goal];
-    return { title: `${CASTE_NAMES[caste]}${job} n°${id}`, doing };
+    const b = this.brain!;
+    const places = b.memory.length;
+    const learned =
+      `Appris : ${places} lieu${places > 1 ? 'x' : ''} de nourriture en mémoire, gain des antennes ${b.turnGain.toFixed(1)}` +
+      (b.trips ? `, ${b.trips} trajet${b.trips > 1 ? 's' : ''} (efficacité ${Math.round(b.efficiency * 100)} %)` : '');
+    return { title: `${CASTE_NAMES[caste]}${job} n°${id}`, doing, learned };
   }
 
   /** Draws the ant in side view, its legs, the CPG phases and the brain's readings. */

@@ -48,6 +48,8 @@ const ALARM_DECAY = 0.85;
 const FIELD_INTERVAL = 15;
 const TRAIL_INTERVAL = 8;
 const TRAIL_DECAY = 0.985;
+/** Ticks for the guide pheromone to fade to a third (40 s). */
+export const GUIDE_LIFE = 30 * 40;
 /** Workers rethink their job about every 20 seconds. */
 export const RETASK_TICKS = 600;
 /** Ticks a larva stays fed after a nurse feeds it. */
@@ -214,6 +216,14 @@ export class Simulation {
   readonly exitDist: Int16Array;
   /** Food trail pheromone, 0 to 1, laid by ants carrying food home. */
   readonly trail: Float32Array;
+  /**
+   * The player's guide pheromone, which only the neuro ant follows: the tick
+   * each cell was last marked. Newer marks smell stronger, so the trail leads
+   * to where it was drawn last.
+   */
+  readonly guideTick: Int32Array;
+  /** Tick of the last guide mark, so nothing scans for a trail long gone. */
+  lastGuideTick = -1e9;
   /** Alarm pheromone, 0 to 1, released where ants meet an enemy; it calls others to fight. */
   readonly alarm: Float32Array;
   /** Steps to where nurses keep the brood. */
@@ -269,6 +279,7 @@ export class Simulation {
     this.homeDist = new Int16Array(cells);
     this.exitDist = new Int16Array(cells);
     this.trail = new Float32Array(cells);
+    this.guideTick = new Int32Array(cells).fill(-1e9);
     this.alarm = new Float32Array(cells);
     this.nurseryDist = new Int16Array(cells);
     this.digDist = new Int16Array(cells);
@@ -344,6 +355,50 @@ export class Simulation {
   /** Open cell something can cling to, ignoring who stands there. */
   walkable(x: number, y: number): boolean {
     return this.world.inBounds(x, y) && !this.world.solidAt(x, y) && this.hasGrip(x, y);
+  }
+
+  /** Strength of the guide pheromone in a cell, from 0 to 1. */
+  guideAt(x: number, y: number): number {
+    if (!this.world.inBounds(x, y)) return 0;
+    const age = this.tick - this.guideTick[this.idx(x, y)];
+    return age < 0 || age > GUIDE_LIFE * 4 ? 0 : Math.exp(-age / GUIDE_LIFE);
+  }
+
+  /** True while some guide pheromone is still fresh enough to smell. */
+  guideActive(): boolean {
+    return this.tick - this.lastGuideTick <= GUIDE_LIFE * 4;
+  }
+
+  /** Marks the open cells around a point with guide pheromone. */
+  paintGuide(cx: number, cy: number, radius: number): void {
+    const r = Math.ceil(radius);
+    for (let y = cy - r; y <= cy + r; y++) {
+      for (let x = cx - r; x <= cx + r; x++) {
+        if ((x - cx) ** 2 + (y - cy) ** 2 > radius * radius + 0.5) continue;
+        if (!this.world.inBounds(x, y) || this.world.solidAt(x, y)) continue;
+        this.guideTick[this.idx(x, y)] = this.tick;
+      }
+    }
+    this.lastGuideTick = this.tick;
+  }
+
+  /** Drops food on the open cells around a point (the menu's food tool); it falls like sand. */
+  placeFood(cx: number, cy: number, radius: number): void {
+    const r = Math.ceil(radius);
+    for (let y = cy - r; y <= cy + r; y++) {
+      for (let x = cx - r; x <= cx + r; x++) {
+        if ((x - cx) ** 2 + (y - cy) ** 2 > radius * radius + 0.5) continue;
+        if (!this.world.inBounds(x, y) || this.world.get(x, y) !== Material.Air || !this.free(x, y)) continue;
+        this.world.set(x, y, Material.Food);
+        this.foodOnMap++;
+        this.settling.add(this.world.index(x, y));
+      }
+    }
+  }
+
+  clearGuide(): void {
+    this.guideTick.fill(-1e9);
+    this.lastGuideTick = -1e9;
   }
 
   /** Under water with no air just above: an ant here cannot breathe. */

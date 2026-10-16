@@ -53,8 +53,8 @@ function phaseName(t: number): string {
   return 'nuit';
 }
 
-type Tool = 'none' | 'hand' | 'water' | 'neuro';
-const TOOL_ICONS: Record<Tool, string> = { none: '', hand: ' ✋', water: ' 💧', neuro: ' 🧠' };
+type Tool = 'none' | 'hand' | 'water' | 'food' | 'neuro' | 'guide';
+const TOOL_ICONS: Record<Tool, string> = { none: '', hand: ' ✋', water: ' 💧', food: ' 🌰', neuro: ' 🧠', guide: ' 🟣' };
 const BRUSHES = [
   { label: 'Petit', radius: 0.6 },
   { label: 'Moyen', radius: 1.6 },
@@ -121,6 +121,8 @@ async function start() {
   let wasPainting = false;
   /** The neuro panel opened by itself once, when the controller found its first ant. */
   let neuroShown = false;
+  let foodAcc = 150;
+  let guideFrom: { x: number; y: number } | null = null;
 
   const setControlling = (on: boolean) => {
     controlling = on && !sim.gameOver;
@@ -194,7 +196,7 @@ async function start() {
     menuButton.textContent = '☰' + TOOL_ICONS[t];
     menuButton.classList.toggle('on', t !== 'none');
     for (const [k, b] of toolButtons) b.classList.toggle('on', k === t);
-    app.canvas.style.cursor = t === 'hand' ? 'grab' : t === 'water' || t === 'neuro' ? 'crosshair' : '';
+    app.canvas.style.cursor = t === 'hand' ? 'grab' : t === 'water' || t === 'food' || t === 'neuro' || t === 'guide' ? 'crosshair' : '';
   };
   const setBrush = (k: number) => {
     brush = k;
@@ -210,7 +212,9 @@ async function start() {
   for (const [t, label, title] of [
     ['hand', '✋ Main', 'Attraper et lâcher les fourmis et les blocs'],
     ['water', '💧 Eau', "Verser de l'eau"],
+    ['food', '🌰 Nourriture', 'Déposer de la nourriture'],
     ['neuro', '🧠 Neuro', 'Donner le cerveau neuro à une fourmi'],
+    ['guide', '🟣 Piste guide', 'Tracer une phéromone que suit la fourmi cerveau'],
     ['none', 'Aucun', 'Déplacer la vue'],
   ] as [Tool, string, string][]) {
     const b = makeButton(label, title, () => pickTool(t));
@@ -219,13 +223,16 @@ async function start() {
   }
   const sizeList = document.getElementById('size-list')!;
   BRUSHES.forEach((br, k) => {
-    const b = makeButton(br.label, `Taille du jet d'eau : ${br.label.toLowerCase()}`, () => setBrush(k));
+    const b = makeButton(br.label, `Taille du pinceau (eau, nourriture) : ${br.label.toLowerCase()}`, () => setBrush(k));
     brushButtons.push(b);
     sizeList.append(b);
   });
-  document.getElementById('tool-actions')!.append(makeButton("Vider l'eau", "Retirer toute l'eau", () => sim.water.clear()));
+  document.getElementById('tool-actions')!.append(
+    makeButton("Vider l'eau", "Retirer toute l'eau", () => sim.water.clear()),
+    makeButton('Effacer la piste', 'Retirer la phéromone guide', () => sim.clearGuide()),
+  );
 
-  const menuButton = makeButton('☰', 'Outils : main, eau', toggleMenu);
+  const menuButton = makeButton('☰', 'Outils : main, eau, nourriture, fourmi cerveau', toggleMenu);
   const pauseButton = makeButton('II', 'Pause', togglePause);
   const speedButton = makeButton('×1', 'Vitesse du temps', cycleSpeed);
   const queenButton = makeButton('Reine', 'Prendre la reine en main', () => setControlling(!controlling));
@@ -306,12 +313,27 @@ async function start() {
       pourAcc += ticker.deltaMS;
       for (; pourAcc >= TICK_MS; pourAcc -= TICK_MS) sim.pourWater(cell.x, cell.y, BRUSHES[brush].radius);
     }
+    // Food: a tap drops one handful; holding the pointer down keeps pouring, slower than water.
+    if (tool === 'food' && tap && !cell) sim.placeFood(tap.x, tap.y, BRUSHES[brush].radius);
+    if (tool === 'food' && cell) {
+      foodAcc += ticker.deltaMS;
+      for (; foodAcc >= 150; foodAcc -= 150) sim.placeFood(cell.x, cell.y, BRUSHES[brush].radius);
+    } else foodAcc = 150;
     if (tool === 'hand') {
       if (cell && !wasPainting) sim.grab(cell.x, cell.y);
       else if (cell) sim.moveHeld(cell.x, cell.y);
       else if (!controls.painting && wasPainting) sim.dropHeld();
       app.canvas.style.cursor = controls.painting && (sim.held >= 0 || sim.heldCell >= 0) ? 'grabbing' : 'grab';
     }
+    // Guide pheromone: a continuous line from the last point, so a quick swipe leaves no gaps.
+    if (tool === 'guide' && cell) {
+      const from = guideFrom ?? cell;
+      const n = Math.max(Math.abs(cell.x - from.x), Math.abs(cell.y - from.y), 1);
+      for (let k = 1; k <= n; k++) {
+        sim.paintGuide(Math.round(from.x + ((cell.x - from.x) * k) / n), Math.round(from.y + ((cell.y - from.y) * k) / n), 0.8);
+      }
+      guideFrom = cell;
+    } else guideFrom = null;
     if (tool === 'neuro' && tap) {
       const id = nearestAnt(tap.x, tap.y);
       if (id >= 0) watchAnt(id);
@@ -340,7 +362,7 @@ async function start() {
         neuro.draw(neuroCtx, w, h, sim);
         const words = neuro.describe(sim);
         neuroTitle.textContent = `🧠 ${words.title}`;
-        neuroDoing.textContent = `Elle ${words.doing}.`;
+        neuroDoing.textContent = `Elle ${words.doing}. ${words.learned}.`;
       }
     }
 

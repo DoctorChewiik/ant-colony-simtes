@@ -1,5 +1,5 @@
 import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js';
-import { CASTES, Caste, ENEMIES, EnemyKind, Item, MATERIALS, Stage, TICK_RATE, hash2, type Simulation } from '../core';
+import { CASTES, Caste, ENEMIES, EnemyKind, GUIDE_LIFE, Item, MATERIALS, Stage, TICK_RATE, hash2, type Simulation } from '../core';
 import { ANT_H, ANT_W, CASTE_LOOKS, SPIDER_H, SPIDER_W, makeAntFrames, makeGyneFrames, makeSpiderFrames } from './antSprite';
 
 const PELLET_COLORS: Record<Item, number> = {
@@ -209,8 +209,10 @@ export class Renderer {
       this.worldCtx.putImageData(this.worldImage, 0, 0);
       this.worldTexture.source.update();
     }
-    this.scentSprite.visible = this.showScents;
-    if (this.showScents && this.frame % SCENT_EVERY === 0) this.paintScents();
+    // The guide pheromone shows even with the other scents hidden.
+    const guide = sim.guideActive();
+    this.scentSprite.visible = this.showScents || guide;
+    if ((this.showScents || guide) && this.frame % SCENT_EVERY === 0) this.paintScents();
 
     this.bars.clear();
     while (this.antViews.length < ants.count) this.addAntView(this.antViews.length);
@@ -239,14 +241,25 @@ export class Renderer {
     this.drawCursor(aimed);
   }
 
-  /** Food trails in green, alarm scent in red. */
+  /** Food trails in green, alarm scent in red, the guide pheromone in violet. */
   private paintScents(): void {
-    const { trail, alarm } = this.sim;
+    const { trail, alarm, guideTick, tick } = this.sim;
     const d = this.scentImage.data;
+    const all = this.showScents;
     for (let i = 0; i < trail.length; i++) {
-      const t = trail[i];
-      const a = alarm[i];
+      const t = all ? trail[i] : 0;
+      const a = all ? alarm[i] : 0;
       const o = i * 4;
+      const age = tick - guideTick[i];
+      if (age >= 0 && age < GUIDE_LIFE * 4) {
+        // Guide pheromone in violet, brightest where it was drawn last.
+        const g = Math.exp(-age / GUIDE_LIFE);
+        d[o] = 190;
+        d[o + 1] = 90;
+        d[o + 2] = 255;
+        d[o + 3] = Math.round(60 + 160 * g);
+        continue;
+      }
       if (t < 0.02 && a < 0.02) {
         d[o + 3] = 0;
         continue;
