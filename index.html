@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ant Colony</title>
+    <link rel="stylesheet" href="/src/game2d/style.css" />
+  </head>
+  <body>
+    <div id="game"></div>
+    <div id="hud">
+      <div class="panel" id="help">
+        <h1>Fourmilière</h1>
+        <p><kbd>ZQSD</kbd> / <kbd>WASD</kbd> / flèches : se déplacer et viser</p>
+        <p><kbd>Espace</kbd> maintenu : creuser · appuyé en portant : déposer</p>
+        <p>Souris : clic maintenu sur une case voisine pour creuser, clic pour déposer</p>
+        <p><kbd>Molette</kbd> : zoom · <kbd>P</kbd> : pause · <kbd>N</kbd> : nouveau monde · <kbd>H</kbd> : cacher l'aide</p>
+      </div>
+      <div class="panel" id="status"></div>
+      <div id="paused" hidden>PAUSE</div>
+    </div>
+    <script type="module" src="/src/game2d/main.ts"></script>
+  </body>
+</html>
