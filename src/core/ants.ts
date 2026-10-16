@@ -26,10 +26,10 @@ export enum Task {
   Guard = 4,
 }
 
-/** A full ant can work this many ticks (two minutes) before it needs to eat. */
-export const ENERGY_MAX = 3600;
+/** A full ant can work this many ticks (eight minutes) before it needs to eat. */
+export const ENERGY_MAX = 30 * 60 * 8;
 /** Below this an ant stops work and goes home to eat. */
-export const HUNGRY = 1200;
+export const HUNGRY = 30 * 60 * 2;
 
 export interface CasteInfo {
   name: string;
@@ -45,8 +45,8 @@ export interface CasteInfo {
 }
 
 export const CASTES: Record<Caste, CasteInfo> = {
-  [Caste.Worker]: { name: 'ouvrière', eggCost: 1, stepTicks: 2, maxHp: 10, bite: 1, lifespan: 30 * 60 * 20 },
-  [Caste.Soldier]: { name: 'soldat', eggCost: 2, stepTicks: 3, maxHp: 30, bite: 4, lifespan: 30 * 60 * 25 },
+  [Caste.Worker]: { name: 'ouvrière', eggCost: 1, stepTicks: 2, maxHp: 10, bite: 1, lifespan: 30 * 60 * 30 },
+  [Caste.Soldier]: { name: 'soldat', eggCost: 2, stepTicks: 3, maxHp: 30, bite: 4, lifespan: 30 * 60 * 35 },
   [Caste.Queen]: { name: 'reine', eggCost: 4, stepTicks: 3, maxHp: 40, bite: 2, lifespan: 30 * 60 * 30 },
   [Caste.Male]: { name: 'mâle', eggCost: 2, stepTicks: 2, maxHp: 6, bite: 0, lifespan: 30 * 60 * 30 },
 };

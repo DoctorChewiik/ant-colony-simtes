@@ -6,10 +6,6 @@ const DEAD_ZONE = 0.35;
 
 export interface TouchActions {
   toggleDisposal: () => void;
-  togglePause: () => void;
-  toggleHelp: () => void;
-  toggleScents: () => void;
-  zoom: (factor: number) => void;
 }
 
 function button(label: string, className: string, title: string): HTMLButtonElement {
@@ -31,7 +27,7 @@ function onTap(el: HTMLElement, fn: () => void): void {
   });
 }
 
-/** On-screen joystick and action buttons for phones and tablets. */
+/** On-screen joystick and action buttons for phones and tablets, shown while the player controls the queen. */
 export function mountTouchControls(root: HTMLElement, controls: Controls, actions: TouchActions): void {
   const ui = document.createElement('div');
   ui.id = 'touch';
@@ -126,22 +122,6 @@ export function mountTouchControls(root: HTMLElement, controls: Controls, action
   }
   ui.appendChild(layMenu);
   onTap(lay, () => (layMenu.hidden = !layMenu.hidden));
-
-  // Top-right: zoom, pause and help.
-  const top = document.createElement('div');
-  top.className = 'top-buttons';
-  const zoomIn = button('+', 'small', 'Zoomer');
-  onTap(zoomIn, () => actions.zoom(1.25));
-  const zoomOut = button('−', 'small', 'Dézoomer');
-  onTap(zoomOut, () => actions.zoom(0.8));
-  const pause = button('II', 'small', 'Pause');
-  onTap(pause, actions.togglePause);
-  const help = button('?', 'small', "Afficher l'aide");
-  onTap(help, actions.toggleHelp);
-  const scents = button('Odeurs', 'small wide', 'Voir les phéromones');
-  onTap(scents, actions.toggleScents);
-  top.append(zoomIn, zoomOut, pause, help, scents);
-  ui.appendChild(top);
 }
 
 /** True on phones and tablets, where there is no keyboard or mouse. */

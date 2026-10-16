@@ -26,7 +26,13 @@ export class Controls {
   touchDig = false;
   mouse: { x: number; y: number } | null = null;
   onKey: (code: string) => void = () => {};
-  onZoom: (factor: number) => void = () => {};
+  /** Zoom by `factor` around a screen point. */
+  onZoom: (factor: number, x?: number, y?: number) => void = () => {};
+  /** Drag to move the camera, in spectator mode. */
+  onPan: (dx: number, dy: number) => void = () => {};
+  /** True while the colony plays itself: the pointer moves the camera instead of digging. */
+  spectator = true;
+  private dragFrom: { x: number; y: number } | null = null;
 
   constructor(target: HTMLElement) {
     window.addEventListener('keydown', (e) => {
@@ -53,9 +59,14 @@ export class Controls {
       if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (touches.size === 2) {
         const d = spread();
-        if (pinch > 0) this.onZoom(d / pinch);
+        const [a, b] = [...touches.values()];
+        if (pinch > 0) this.onZoom(d / pinch, (a.x + b.x) / 2, (a.y + b.y) / 2);
         pinch = d;
         return;
+      }
+      if (this.spectator && this.dragFrom) {
+        this.onPan(e.clientX - this.dragFrom.x, e.clientY - this.dragFrom.y);
+        this.dragFrom = { x: e.clientX, y: e.clientY };
       }
       this.mouse = { x: e.clientX, y: e.clientY };
     });
@@ -67,15 +78,21 @@ export class Controls {
       if (e.pointerType !== 'mouse') touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (touches.size >= 2) {
         this.mouseDown = false;
+        this.dragFrom = null;
         pinch = spread();
         return;
       }
       this.mouse = { x: e.clientX, y: e.clientY };
+      if (this.spectator) {
+        this.dragFrom = { x: e.clientX, y: e.clientY };
+        return;
+      }
       this.mouseDown = true;
       this.dropQueued = true;
     });
     const release = (e: PointerEvent) => {
       touches.delete(e.pointerId);
+      this.dragFrom = null;
       if (touches.size < 2) pinch = 0;
       this.mouseDown = false;
       if (e.pointerType !== 'mouse') this.mouse = null;
@@ -86,7 +103,7 @@ export class Controls {
       'wheel',
       (e) => {
         e.preventDefault();
-        this.onZoom(e.deltaY < 0 ? 1.15 : 1 / 1.15);
+        this.onZoom(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX, e.clientY);
       },
       { passive: false },
     );
@@ -109,6 +126,14 @@ export class Controls {
     const n = neg.some((k) => this.keys.has(k));
     const p = pos.some((k) => this.keys.has(k));
     return n === p ? 0 : n ? -1 : 1;
+  }
+
+  /** Arrow keys and WASD/ZQSD, plus the on-screen joystick, as a direction. */
+  direction(): { x: Axis; y: Axis } {
+    return {
+      x: this.axis(['KeyA', 'ArrowLeft'], ['KeyD', 'ArrowRight']) || this.touchAxis.x,
+      y: this.axis(['KeyW', 'ArrowUp'], ['KeyS', 'ArrowDown']) || this.touchAxis.y,
+    };
   }
 
   /** Builds this tick's input. `mouseCell` is the world cell under the pointer. */

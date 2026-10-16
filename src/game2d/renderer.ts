@@ -10,9 +10,12 @@ const PELLET_COLORS: Record<Item, number> = {
   [Item.Brood]: 0xf4f0e2,
 };
 import { cellColor } from './palette';
+import { Scenery } from './scenery';
 
-const MIN_ZOOM = 2;
+const MIN_ZOOM = 1;
 const MAX_ZOOM = 32;
+/** A worker is drawn this many cells long. */
+const ANT_LENGTH = 1.5;
 /** Redraw the scent overlay every few frames; it changes slowly. */
 const SCENT_EVERY = 6;
 
@@ -42,8 +45,12 @@ interface EnemyView extends Glide {
 /** Draws the simulation as a side-view pixel ant farm. Reads the sim, never changes it. */
 export class Renderer {
   readonly camera = new Container();
-  zoom = 14;
+  zoom = 4;
   showScents = false;
+  /** Follow the queen (when the player controls her) or let the camera roam free. */
+  follow = false;
+  private scenery: Scenery;
+  private pantry = new Graphics();
   private worldCanvas: HTMLCanvasElement;
   private worldCtx: CanvasRenderingContext2D;
   private worldImage: ImageData;
@@ -99,8 +106,11 @@ export class Renderer {
     this.gyneFrames = makeGyneFrames();
     this.spiderFrames = makeSpiderFrames();
 
+    this.scenery = new Scenery(sim);
     this.camera.addChild(
+      this.scenery.world,
       new Sprite(this.worldTexture),
+      this.pantry,
       this.scentSprite,
       this.brood,
       this.cursor,
@@ -108,14 +118,59 @@ export class Renderer {
       this.antLayer,
       this.bars,
     );
-    app.stage.addChild(this.camera);
-
-    const p = sim.player;
-    this.camPos = { x: sim.ants.x[p] + 0.5, y: sim.ants.y[p] + 0.5 };
+    app.stage.addChild(this.scenery.back, this.camera, this.scenery.front);
+    this.resetView();
   }
 
-  zoomBy(factor: number): void {
-    this.zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this.zoom * factor));
+  /** Frames the nest entrance and the ground below it, like a cut-away ant farm. */
+  resetView(): void {
+    const { screen } = this.app;
+    this.zoom = Math.max(this.minZoom(), 2, Math.min(8, Math.min(screen.width / 170, screen.height / 110)));
+    this.camPos = {
+      x: this.sim.entranceX + 0.5,
+      y: this.sim.world.surface[this.sim.entranceX] + screen.height / this.zoom / 2 - 34,
+    };
+  }
+
+  zoomBy(factor: number, sx = this.app.screen.width / 2, sy = this.app.screen.height / 2): void {
+    // Keep the cell under the pointer where it is.
+    const before = this.screenToWorld(sx, sy);
+    this.zoom = Math.min(MAX_ZOOM, Math.max(this.minZoom(), this.zoom * factor));
+    const after = this.screenToWorld(sx, sy);
+    this.camPos.x += before.x - after.x;
+    this.camPos.y += before.y - after.y;
+    this.clampCamera();
+  }
+
+  /** Moves the camera by a drag of (dx, dy) screen pixels. */
+  pan(dx: number, dy: number): void {
+    this.camPos.x -= dx / this.zoom;
+    this.camPos.y -= dy / this.zoom;
+    this.clampCamera();
+  }
+
+  private screenToWorld(sx: number, sy: number): { x: number; y: number } {
+    return {
+      x: (sx - this.app.screen.width / 2) / this.zoom + this.camPos.x,
+      y: (sy - this.app.screen.height / 2) / this.zoom + this.camPos.y,
+    };
+  }
+
+  /** Never zoom out past the point where the world stops filling a tall phone screen. */
+  private minZoom(): number {
+    const { world } = this.sim;
+    const span = world.height + 4 - (Math.min(...world.surface) - 70);
+    return Math.max(MIN_ZOOM, this.app.screen.height / span);
+  }
+
+  private clampCamera(): void {
+    if (this.zoom < this.minZoom()) this.zoom = this.minZoom();
+    const { world } = this.sim;
+    const halfW = this.app.screen.width / this.zoom / 2;
+    const halfH = this.app.screen.height / this.zoom / 2;
+    const top = Math.min(...world.surface) - 70;
+    this.camPos.x = halfW * 2 >= world.width ? world.width / 2 : Math.max(halfW, Math.min(world.width - halfW, this.camPos.x));
+    this.camPos.y = Math.max(top + halfH, Math.min(world.height - halfH + 4, this.camPos.y));
   }
 
   /** Screen pixel to world cell. */
@@ -125,13 +180,14 @@ export class Renderer {
   }
 
   private paintCell(x: number, y: number): void {
-    const [r, g, b] = cellColor(this.sim.world, x, y);
+    if (!this.sim.world.inBounds(x, y)) return;
+    const [r, g, b, a] = cellColor(this.sim.world, x, y);
     const i = (y * this.sim.world.width + x) * 4;
     const d = this.worldImage.data;
     d[i] = r;
     d[i + 1] = g;
     d[i + 2] = b;
-    d[i + 3] = 255;
+    d[i + 3] = a;
   }
 
   render(dt: number, aimed: { x: number; y: number } | null): void {
@@ -142,7 +198,12 @@ export class Renderer {
 
     const changes = world.drainChanges();
     if (changes.length) {
-      for (const i of changes) this.paintCell(i % world.width, Math.floor(i / world.width));
+      // Neighbours too: wall shading and rock rims depend on them.
+      for (const i of changes) {
+        const cx = i % world.width;
+        const cy = Math.floor(i / world.width);
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) this.paintCell(cx + dx, cy + dy);
+      }
       this.worldCtx.putImageData(this.worldImage, 0, 0);
       this.worldTexture.source.update();
     }
@@ -156,11 +217,16 @@ export class Renderer {
     for (let id = 0; id < enemies.count; id++) this.updateEnemyView(id);
     this.drawBrood();
 
-    // Camera follows the player's ant.
-    const player = this.antViews[sim.player].pos;
-    const kc = 1 - Math.exp(-dt / 120);
-    this.camPos.x += (player.x - this.camPos.x) * kc;
-    this.camPos.y += (player.y - this.camPos.y) * kc;
+    // The camera follows the queen when the player controls her; otherwise it stays where it was put.
+    if (this.follow && ants.alive[sim.player]) {
+      const player = this.antViews[sim.player].pos;
+      const kc = 1 - Math.exp(-dt / 120);
+      this.camPos.x += (player.x - this.camPos.x) * kc;
+      this.camPos.y += (player.y - this.camPos.y) * kc;
+    }
+    this.clampCamera();
+    this.drawPantry();
+    this.scenery.update(dt, this.camPos.x, this.camPos.y, this.zoom, this.app.screen.width, this.app.screen.height);
     this.camera.scale.set(this.zoom);
     this.camera.position.set(
       Math.round(this.app.screen.width / 2 - this.camPos.x * this.zoom),
@@ -333,10 +399,32 @@ export class Renderer {
 
     const s = view.sprite;
     s.rotation = rotation;
-    s.scale.set(scale / (ANT_W / 2), (flip * scale) / ANT_H);
+    s.scale.set((scale * ANT_LENGTH) / ANT_W, (flip * scale * ANT_LENGTH * 0.6) / ANT_H);
     // Sit on the gripped surface rather than float in the middle of the cell.
     const lift = 0.1 - (scale - 1) * 0.5;
     s.position.set(view.pos.x + support[0] * lift, view.pos.y + support[1] * lift);
+  }
+
+  /** The colony's food reserve, shown as a heap of seeds on the floor of the queen's chamber. */
+  private drawPantry(): void {
+    const g = this.pantry;
+    if (this.frame % 15 !== 1) return;
+    g.clear();
+    const { sim } = this;
+    const room = sim.chambers[2] ?? sim.chambers[0];
+    if (!room) return;
+    const floor = sim.chamberFloor(room);
+    if (floor < 0) return;
+    const fx = floor % sim.world.width;
+    const fy = (floor - fx) / sim.world.width;
+    const seeds = Math.min(80, sim.colony.food);
+    for (let k = 0; k < seeds; k++) {
+      const row = Math.floor(Math.sqrt(k));
+      const col = k - row * row;
+      const x = fx + (col - row) * 0.35 + ((k * 7) % 3) * 0.05;
+      const y = fy + 0.85 - (Math.sqrt(seeds) - row) * 0.2;
+      g.ellipse(x + 0.5, y, 0.22, 0.14).fill(k % 3 ? 0xd9ad52 : 0xc2913c);
+    }
   }
 
   private drawBrood(): void {

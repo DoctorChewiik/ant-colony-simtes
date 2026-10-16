@@ -1,8 +1,8 @@
-import { Caste, HUNGRY, Item, Task } from './ants';
+import { CASTES, Caste, HUNGRY, Item, Task } from './ants';
 import { Stage } from './brood';
 import { IDLE, type AntInput, type Axis } from './input';
 import { Material, isDiggable } from './materials';
-import { ALATE_MATURE, MIDDEN_DISTANCE, type Simulation } from './sim';
+import { ALATE_MATURE, MIDDEN_DISTANCE, Season, type Simulation } from './sim';
 
 /** Value of a distance field cell nothing can reach. */
 export const UNREACHABLE = 32767;
@@ -32,7 +32,7 @@ const NURSERY_FETCH = 9;
 const PATROL_RANGE = 14;
 /** Weakest alarm scent an ant will follow. */
 const ALARM_SCENT = 0.05;
-const FOOD_SMELL = 8;
+const FOOD_SMELL = 12;
 
 function move(dx: number, dy: number): AntInput {
   return { ...IDLE, moveX: Math.sign(dx) as Axis, moveY: Math.sign(dy) as Axis };
@@ -46,6 +46,11 @@ function drop(x: number, y: number): AntInput {
   return { ...IDLE, drop: true, target: { x, y } };
 }
 
+/** Standing on the open ground surface (not down the entrance hole). */
+function onSurface(sim: Simulation, x: number, y: number): boolean {
+  return sim.exitDist[sim.idx(x, y)] <= 1;
+}
+
 function chebyshev(ax: number, ay: number, bx: number, by: number): number {
   return Math.max(Math.abs(ax - bx), Math.abs(ay - by));
 }
@@ -54,7 +59,7 @@ function chebyshev(ax: number, ay: number, bx: number, by: number): number {
 function steps(sim: Simulation, x: number, y: number): Array<[number, number]> {
   const out: Array<[number, number]> = [];
   for (const [dx, dy] of DIRS) {
-    if (sim.canStand(x + dx, y + dy) && !sim.squeezes(x, y, x + dx, y + dy)) out.push([dx, dy]);
+    if (sim.canStand(x + dx, y + dy)) out.push([dx, dy]);
   }
   return out;
 }
@@ -72,6 +77,21 @@ function wander(sim: Simulation, id: number, keep = (_dx: number, _dy: number) =
   return move(dx, dy);
 }
 
+/** Walks along the surface in one direction, climbing over mounds and stones on the way. */
+function headAway(sim: Simulation, id: number, dir: number): AntInput {
+  const options = steps(sim, sim.ants.x[id], sim.ants.y[id]);
+  let best: [number, number] | null = null;
+  let bestScore = -Infinity;
+  for (const [dx, dy] of options) {
+    const score = dx * dir * 2 - dy + sim.rng.next() * 0.1;
+    if (score > bestScore) {
+      bestScore = score;
+      best = [dx, dy];
+    }
+  }
+  return best ? move(best[0], best[1]) : IDLE;
+}
+
 /** Steps downhill on a distance field (towards the nest, or out to the surface). */
 function follow(sim: Simulation, id: number, field: Int16Array): AntInput {
   const a = sim.ants;
@@ -86,7 +106,9 @@ function follow(sim: Simulation, id: number, field: Int16Array): AntInput {
       best = [dx, dy];
     }
   }
-  return best ? move(best[0], best[1]) : wander(sim, id);
+  // Blocked by traffic: mostly wait for the way to clear.
+  if (best) return move(best[0], best[1]);
+  return sim.rng.next() < 0.25 ? wander(sim, id) : IDLE;
 }
 
 /** Steps to the neighbour closest to a point. */
@@ -121,13 +143,21 @@ function nearestEnemy(sim: Simulation, x: number, y: number, range: number): num
   return best;
 }
 
+/** Something solid an ant can actually get next to (not buried in soil). */
+function reachable(sim: Simulation, x: number, y: number): boolean {
+  for (const [dx, dy] of DIRS) {
+    if (sim.world.inBounds(x + dx, y + dy) && sim.homeDist[sim.idx(x + dx, y + dy)] !== UNREACHABLE) return true;
+  }
+  return false;
+}
+
 function nearest(sim: Simulation, x: number, y: number, range: number, m: Material): [number, number] | null {
   const w = sim.world;
   let best: [number, number] | null = null;
   let bestDist = range + 1;
   for (let dy = -range; dy <= range; dy++) {
     for (let dx = -range; dx <= range; dx++) {
-      if (w.get(x + dx, y + dy) !== m) continue;
+      if (w.get(x + dx, y + dy) !== m || !reachable(sim, x + dx, y + dy)) continue;
       const d = Math.max(Math.abs(dx), Math.abs(dy));
       if (d < bestDist) {
         bestDist = d;
@@ -187,6 +217,12 @@ export function thinkAnt(sim: Simulation, id: number): AntInput {
     if (best) return move(best[0], best[1]);
   }
 
+  // A starving ant eats first, even with a pellet or a body in its mandibles.
+  if (a.energy[id] < HUNGRY / 3 && sim.colony.food > 0 && carrying !== Item.Food && carrying !== Item.Brood) {
+    if (sim.homeDist[sim.idx(x, y)] <= 2) return { ...IDLE, eat: true };
+    return follow(sim, id, sim.homeDist);
+  }
+
   // Finish the errand in the mandibles first.
   switch (carrying) {
     case Item.Food:
@@ -239,13 +275,19 @@ function forage(sim: Simulation, id: number): AntInput {
   const a = sim.ants;
   const x = a.x[id];
   const y = a.y[id];
-  const food = nearest(sim, x, y, FOOD_SMELL, Material.Food);
+  // Night, rain or winter: foragers come home and wait.
+  if (sim.shelter()) {
+    if (sim.homeDist[sim.idx(x, y)] > 8) return follow(sim, id, sim.homeDist);
+    return stayNear(sim, id, 8, 0.15);
+  }
+  // Underground: head out to the surface first; food is smelled out in the open.
+  const out = onSurface(sim, x, y);
+  const food = out ? nearest(sim, x, y, FOOD_SMELL, Material.Food) : null;
   if (food) {
     if (chebyshev(x, y, food[0], food[1]) === 1) return act(food[0], food[1]);
     return toward(sim, id, food[0], food[1]);
   }
-  // Underground: head out to the surface.
-  if (!sim.outside(x, y)) return sim.rng.next() < 0.9 ? follow(sim, id, sim.exitDist) : wander(sim, id);
+  if (!out) return sim.rng.next() < 0.9 ? follow(sim, id, sim.exitDist) : wander(sim, id);
 
   // Go back to the last place food was found; give up once there and it is gone.
   if (a.memX[id] >= 0) {
@@ -266,7 +308,7 @@ function forage(sim: Simulation, id: number): AntInput {
   const weights = options.map(([dx, dy]) => {
     const i = sim.idx(x + dx, y + dy);
     let w = 1 + 10 * sim.trail[i] + 80 * Math.max(0, sim.trail[i] - trailHere);
-    if (dx === a.aimX[id] && dy === a.aimY[id]) w += 4;
+    if (dx === a.aimX[id] && dy === a.aimY[id]) w += 10;
     if (sim.homeDist[i] > homeHere) w += 1;
     total += w;
     return w;
@@ -297,7 +339,8 @@ function dig(sim: Simulation, id: number): AntInput {
   const choices: Array<[number, number]> = [];
   for (const [dx, dy] of DIRS) {
     const m = w.get(x + dx, y + dy);
-    if (!isDiggable(m) || m === Material.Food || m === Material.Corpse) continue;
+    // Food that rolled into a tunnel is cleared too, and taken home.
+    if (!isDiggable(m) || m === Material.Corpse) continue;
     if (sim.inPlan(x + dx, y + dy)) choices.push([x + dx, y + dy]);
   }
   if (choices.length) {
@@ -317,16 +360,17 @@ function haulSoil(sim: Simulation, id: number): AntInput {
   const a = sim.ants;
   const x = a.x[id];
   const y = a.y[id];
-  if (!sim.outside(x, y)) return follow(sim, id, sim.exitDist);
+  if (!onSurface(sim, x, y)) return follow(sim, id, sim.exitDist);
   const away = Math.sign(x - sim.entranceX) || a.facing[id];
-  const far = Math.abs(x - sim.entranceX) > 18;
+  // Every column near the mound is full: give up and leave the pellet where it is.
+  const far = Math.abs(x - sim.entranceX) > 60;
   for (const dx of [away, -away, 0]) {
     const cx = x + dx;
     if (!far && !sim.spoilColumn(cx)) continue;
     const cy = sim.topSolid(cx) - 1;
     if (Math.abs(cy - y) <= 1 && (cx !== x || cy !== y) && sim.free(cx, cy)) return drop(cx, cy);
   }
-  return move(away, 0);
+  return headAway(sim, id, away);
 }
 
 /** Dead nestmates are carried out of the nest and left on a refuse pile well away from it. */
@@ -334,7 +378,7 @@ function carryToMidden(sim: Simulation, id: number): AntInput {
   const a = sim.ants;
   const x = a.x[id];
   const y = a.y[id];
-  if (!sim.outside(x, y)) return follow(sim, id, sim.exitDist);
+  if (!onSurface(sim, x, y)) return follow(sim, id, sim.exitDist);
   const away = Math.sign(x - sim.colony.nestX) || a.facing[id];
   if (sim.middenSpot(x, y)) {
     for (const dx of [away, -away]) {
@@ -342,7 +386,7 @@ function carryToMidden(sim: Simulation, id: number): AntInput {
       if (Math.abs(cy - y) <= 1 && sim.free(x + dx, cy)) return drop(x + dx, cy);
     }
   }
-  return move(away, 0);
+  return headAway(sim, id, away);
 }
 
 /** A nurse carries an egg, larva or pupa to the nursery and sets it on the floor. */
@@ -450,4 +494,83 @@ function stayNear(sim: Simulation, id: number, range: number, activity: number):
   if (here > range) return follow(sim, id, home);
   if (sim.rng.next() >= activity) return IDLE;
   return wander(sim, id, (cx, cy) => home[sim.idx(cx, cy)] <= range);
+}
+
+/**
+ * The queen when nobody controls her. A founding queen walks to the planned
+ * entrance and digs her way down to the first chamber, then stays there and
+ * lays: workers first, soldiers once the colony is established, and winged
+ * queens and males when it is big, in spring and summer. She holds back
+ * when food is short, when there is already plenty of brood, and in winter.
+ */
+export function thinkQueen(sim: Simulation): AntInput {
+  const id = sim.player;
+  const a = sim.ants;
+  const w = sim.world;
+  const x = a.x[id];
+  const y = a.y[id];
+
+  for (const [dx, dy] of DIRS) {
+    if (sim.enemyAt(x + dx, y + dy) >= 0) return act(x + dx, y + dy);
+  }
+
+  const home = sim.chambers[0];
+  const floor = home ? sim.chamberFloor(home) : -1;
+  if (floor < 0) {
+    // Founding: dig down the planned shaft, like a digger, preferring the way to her chamber.
+    if (!home) return IDLE;
+    const t = a.digTarget[id];
+    if (t >= 0 && isDiggable(w.cells[t] as Material)) return act(t % w.width, Math.floor(t / w.width));
+    let best: [number, number] | null = null;
+    let bestDist = Infinity;
+    for (const [dx, dy] of DIRS) {
+      const cx = x + dx;
+      const cy = y + dy;
+      const m = w.get(cx, cy);
+      if (!sim.inPlan(cx, cy) || !isDiggable(m) || m === Material.Food || m === Material.Corpse) continue;
+      const dist = Math.hypot(home.x - cx, home.y - cy);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = [cx, cy];
+      }
+    }
+    const here = Math.hypot(home.x - x, home.y - y);
+    if (best && bestDist < here) return act(best[0], best[1]);
+    // Walk on through what is already dug if that gets her closer.
+    for (const [dx, dy] of steps(sim, x, y)) {
+      if (sim.inPlan(x + dx, y + dy) && Math.hypot(home.x - x - dx, home.y - y - dy) < here - 0.5) return move(dx, dy);
+    }
+    if (best) return act(best[0], best[1]);
+    if (sim.digDist[sim.idx(x, y)] !== UNREACHABLE) return follow(sim, id, sim.digDist);
+    return toward(sim, id, home.x, home.y);
+  }
+
+  // In the queen's chamber.
+  const d = sim.homeDist[sim.idx(x, y)];
+  if (d > 3 && d !== UNREACHABLE) return follow(sim, id, sim.homeDist);
+  if (sim.broodAt(x, y)) return wander(sim, id, (cx, cy) => sim.homeDist[sim.idx(cx, cy)] <= 3);
+  const caste = chooseEgg(sim);
+  if (caste === null) return sim.rng.next() < 0.02 ? wander(sim, id, (cx, cy) => sim.homeDist[sim.idx(cx, cy)] <= 3) : IDLE;
+  return { ...IDLE, lay: caste };
+}
+
+function chooseEgg(sim: Simulation): Caste | null {
+  if (sim.season() === Season.Winter) return null;
+  const a = sim.ants;
+  let workers = 0;
+  let soldiers = 0;
+  for (let i = 0; i < a.count; i++) {
+    if (!a.alive[i]) continue;
+    if (a.caste[i] === Caste.Worker) workers++;
+    else if (a.caste[i] === Caste.Soldier) soldiers++;
+  }
+  // Enough brood for the nurses to raise, and food left over for the adults.
+  if (sim.brood.count >= Math.max(5, workers * 0.6)) return null;
+  const keep = Math.max(2, Math.floor(workers / 2));
+  let caste = Caste.Worker;
+  const r = sim.rng.next();
+  const breeding = workers >= 30 && (sim.season() === Season.Spring || sim.season() === Season.Summer);
+  if (breeding && r < 0.1) caste = r < 0.04 ? Caste.Queen : Caste.Male;
+  else if (workers >= 10 && soldiers < workers / 6 && r < 0.3) caste = Caste.Soldier;
+  return sim.colony.food >= CASTES[caste].eggCost + keep ? caste : null;
 }

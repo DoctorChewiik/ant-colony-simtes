@@ -1,7 +1,10 @@
 :root {
-  --panel-bg: rgba(20, 14, 10, 0.72);
+  --panel-bg: rgba(20, 14, 10, 0.78);
   --panel-text: #f3e9dc;
   --accent: #e8b04a;
+  --card-bg: rgba(242, 232, 210, 0.94);
+  --card-ink: #3a2a1c;
+  --card-edge: #6b5038;
 }
 
 * {
@@ -46,7 +49,101 @@ body {
 }
 
 #help {
-  top: 12px;
+  top: 96px;
+  max-width: 520px;
+}
+
+#details {
+  top: 96px;
+}
+
+#help[hidden],
+#details[hidden],
+#alerts[hidden] {
+  display: none;
+}
+
+.indent {
+  padding-left: 12px;
+  opacity: 0.85;
+}
+
+/* The colony card, top left, like a field notebook label. */
+.card {
+  position: absolute;
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  left: calc(10px + env(safe-area-inset-left, 0px));
+  background: var(--card-bg);
+  color: var(--card-ink);
+  border: 2px solid var(--card-edge);
+  border-radius: 6px;
+  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.35);
+  padding: 6px 12px 8px;
+  max-width: min(460px, calc(100vw - 20px));
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.card .label {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: bold;
+}
+
+#headline {
+  font-size: 17px;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+}
+
+#alerts {
+  font-size: 12px;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.card .alert {
+  color: #a8321f;
+}
+
+.toolbar {
+  position: absolute;
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  right: calc(10px + env(safe-area-inset-right, 0px));
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 50vw;
+  pointer-events: auto;
+}
+
+.tool {
+  font: inherit;
+  font-size: 13px;
+  font-weight: bold;
+  color: var(--card-ink);
+  background: var(--card-bg);
+  border: 2px solid var(--card-edge);
+  border-radius: 6px;
+  min-width: 40px;
+  min-height: 36px;
+  padding: 4px 10px;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.tool.on {
+  background: var(--accent);
 }
 
 #help h1 {
@@ -59,9 +156,6 @@ body {
   margin: 0;
 }
 
-#status {
-  bottom: 12px;
-}
 
 kbd {
   border: 1px solid rgba(243, 233, 220, 0.4);
@@ -96,26 +190,51 @@ body.touch .touch-only {
   display: block;
 }
 
-/* Phones: status on top, compact, controls along the bottom. */
+/* Phones: smaller card and panels, toolbar wraps under it. */
 body.touch .panel {
   font-size: 11px;
-  max-width: calc(100vw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
-}
-
-body.touch #status {
-  bottom: auto;
-  top: calc(8px + env(safe-area-inset-top, 0px));
-  left: calc(8px + env(safe-area-inset-left, 0px));
-  right: 132px;
-  max-width: none;
-  padding: 6px 8px;
-}
-
-body.touch #help {
-  top: calc(96px + env(safe-area-inset-top, 0px));
   left: calc(8px + env(safe-area-inset-left, 0px));
   right: calc(8px + env(safe-area-inset-right, 0px));
   max-width: none;
+  top: calc(150px + env(safe-area-inset-top, 0px));
+}
+
+@media (max-width: 640px) {
+  #headline {
+    font-size: 14px;
+  }
+
+  .card {
+    right: calc(10px + env(safe-area-inset-right, 0px));
+  }
+
+  .toolbar {
+    top: auto;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    left: calc(10px + env(safe-area-inset-left, 0px));
+    max-width: none;
+    justify-content: center;
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+
+  .toolbar .tool {
+    font-size: 12px;
+    min-width: 0;
+    padding: 6px 7px;
+  }
+
+  body.controlling .toolbar {
+    bottom: auto;
+    top: calc(118px + env(safe-area-inset-top, 0px));
+  }
+}
+
+/* The joystick and action buttons only show while the player controls the queen. */
+body:not(.controlling) .joystick,
+body:not(.controlling) .actions,
+body:not(.controlling) .lay-menu {
+  display: none !important;
 }
 
 #touch {
@@ -202,27 +321,6 @@ body.touch #help {
   display: none;
 }
 
-.top-buttons {
-  position: absolute;
-  top: calc(8px + env(safe-area-inset-top, 0px));
-  right: calc(8px + env(safe-area-inset-right, 0px));
-  display: grid;
-  grid-template-columns: repeat(2, 56px);
-  gap: 6px;
-}
-
-.touch-btn.small {
-  min-width: 56px;
-  min-height: 40px;
-  padding: 4px;
-  font-size: 16px;
-}
-
-.touch-btn.wide {
-  grid-column: span 2;
-  font-size: 13px;
-}
-
-.alert {
+.panel .alert {
   color: #ff8a6a;
 }

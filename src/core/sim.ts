@@ -4,6 +4,7 @@ import { Brood, STAGE_TICKS, Stage } from './brood';
 import { ENEMIES, Enemies, EnemyKind } from './enemies';
 import type { AntInput } from './input';
 import { MATERIALS, Material, isDiggable } from './materials';
+import { generateNestPlan, rasterizePlan, type PlanNode } from './nestplan';
 import { Rng } from './rng';
 import { generateWorld } from './worldgen';
 import type { World } from './world';
@@ -21,16 +22,17 @@ export enum DigDisposal {
 }
 
 /** Chance per tick that a piece of food appears somewhere on the surface. */
-export const FOOD_SPAWN_CHANCE = 1 / 90;
-export const MAX_FOOD_ON_MAP = 40;
+export const FOOD_SPAWN_CHANCE = 1 / 45;
+/** Most food lying around at once, per 100 columns of map. */
+export const MAX_FOOD_ON_MAP = 16;
 /** Reserve gained when an ant eats one piece of food or brings it home. */
 export const FOOD_VALUE = 3;
 /** Reserve a founding queen starts with, from her own body fat. */
-export const STARTING_FOOD = 5;
+export const STARTING_FOOD = 8;
 export const LAY_COOLDOWN = 30;
 export const BITE_TICKS = 10;
 /** Chance per tick that a spider shows up, once the colony has a few ants. */
-export const ENEMY_SPAWN_CHANCE = 1 / 1200;
+export const ENEMY_SPAWN_CHANCE = 1 / 3000;
 /** Dug soil is piled at least this many columns from the hole, at most this high. */
 const SPOIL_DISTANCE = 8;
 const SPOIL_HEIGHT = 4;
@@ -49,7 +51,7 @@ export const RETASK_TICKS = 600;
 /** Ticks a larva stays fed after a nurse feeds it. */
 export const LARVA_MEAL = 150;
 /** A hungry ant with an empty reserve loses 1 hp this often. */
-const STARVE_TICKS = 90;
+const STARVE_TICKS = 300;
 /** Nuptial flights: every 3 minutes, for 30 seconds, once the colony has enough workers. */
 export const FLIGHT_PERIOD = 30 * 180;
 export const FLIGHT_WINDOW = 30 * 30;
@@ -61,6 +63,38 @@ export const MIDDEN_DISTANCE = 22;
 /** Workers younger than this mostly nurse; older than ADULT_AGE mostly forage. */
 export const YOUNG_AGE = 30 * 120;
 export const ADULT_AGE = 30 * 300;
+
+/** One in-game day lasts three minutes; seasons change every few days. */
+export const DAY_TICKS = 30 * 180;
+export const SEASON_DAYS = 4;
+/** The first day starts in the morning. */
+const DAY_START = 0.1;
+
+export enum Season {
+  Spring = 0,
+  Summer = 1,
+  Autumn = 2,
+  Winter = 3,
+}
+
+/** Food turns up more in summer, hardly at all in winter. */
+const SEASON_FOOD: Record<Season, number> = {
+  [Season.Spring]: 1,
+  [Season.Summer]: 1.6,
+  [Season.Autumn]: 0.8,
+  [Season.Winter]: 0.15,
+};
+/** Chance per tick that rain starts. */
+const SEASON_RAIN: Record<Season, number> = {
+  [Season.Spring]: 1 / 7000,
+  [Season.Summer]: 1 / 12000,
+  [Season.Autumn]: 1 / 5000,
+  [Season.Winter]: 1 / 9000,
+};
+/** Share of the soil the colony's diggers carry out to the mound. */
+const CARRY_OUT_SHARE = 0.35;
+/** A new chamber is planned for every few ants. */
+const ANTS_PER_ROOM = 5;
 
 /** One room of the nest the workers are digging: an ellipse centred on (x, y). */
 export interface Chamber {
@@ -164,8 +198,17 @@ export class Simulation {
   readonly nurseryDist: Int16Array;
   /** Steps to the nearest wall the diggers still have to dig, following the nest plan. */
   readonly digDist: Int16Array;
-  /** Rooms of the nest plan: 0 is the queen's chamber, 1 the nursery, then more as the colony grows. */
+  /** Rooms of the nest plan dug so far or being dug: 0 is the queen's chamber, 1 the nursery. */
   chambers: Chamber[] = [];
+  /** The whole nest this colony will dig as it grows; see nestplan.ts. */
+  readonly plan: PlanNode[];
+  /** How many plan nodes the colony is building now. */
+  planActive = 0;
+  /** 1 on every cell of the active part of the plan. */
+  readonly planMask: Uint8Array;
+  private planCells: number[] = [];
+  /** Rain lasts until this tick. */
+  rainUntil = 0;
   /** Where the nursery currently is; it moves away from danger during an attack. */
   nurseryX = 0;
   nurseryY = 0;
@@ -196,6 +239,7 @@ export class Simulation {
     this.alarm = new Float32Array(cells);
     this.nurseryDist = new Int16Array(cells);
     this.digDist = new Int16Array(cells);
+    this.planMask = new Uint8Array(cells);
     this.layCooldown = new Uint16Array(this.ants.capacity);
     const sx = Math.floor(options.width / 2);
     const sy = this.world.surface[sx] - 1;
@@ -204,6 +248,7 @@ export class Simulation {
     this.player = this.spawnAnt(sx, sy, Caste.Queen);
     this.entranceX = sx;
     this.entranceY = sy;
+    this.plan = generateNestPlan(this.world, sx, options.seed);
     this.updateFields();
   }
 
@@ -216,6 +261,9 @@ export class Simulation {
     this.updateBrood();
     this.spawnFood();
     this.spawnEnemies();
+    if (!this.raining() && this.rng.next() < SEASON_RAIN[this.season()]) {
+      this.rainUntil = this.tick + this.rng.int(900, 2700);
+    }
     if (this.tick % TRAIL_INTERVAL === 0) {
       const t = this.trail;
       for (let i = 0; i < t.length; i++) if (t[i] > 0) t[i] = t[i] < 0.01 ? 0 : t[i] * TRAIL_DECAY;
@@ -276,7 +324,7 @@ export class Simulation {
     }
   }
 
-  /** A diagonal step may not squeeze between two solid corners. */
+  /** A diagonal step between two solid corners: too tight for a spider (ants are small enough). */
   squeezes(x: number, y: number, nx: number, ny: number): boolean {
     return nx !== x && ny !== y && this.world.solidAt(nx, y) && this.world.solidAt(x, ny);
   }
@@ -338,26 +386,70 @@ export class Simulation {
 
   /** Is this cell part of the nest the workers are building? */
   inPlan(x: number, y: number): boolean {
+    return this.world.inBounds(x, y) && this.planMask[this.idx(x, y)] === 1;
+  }
+
+  /** Fraction of the day, 0 at dawn; dusk falls at 0.7. */
+  timeOfDay(): number {
+    return (this.tick / DAY_TICKS + DAY_START) % 1;
+  }
+
+  /** Day number, from 1. */
+  day(): number {
+    return Math.floor(this.tick / DAY_TICKS + DAY_START) + 1;
+  }
+
+  season(): Season {
+    return (Math.floor((this.day() - 1) / SEASON_DAYS) % 4) as Season;
+  }
+
+  /** Sunlight from 0 (night) to 1 (day). */
+  daylight(): number {
+    const t = this.timeOfDay();
+    if (t < 0.06) return 0.575 + 0.425 * (t / 0.06);
+    if (t < 0.64) return 1;
+    if (t < 0.74) return 1 - 0.85 * ((t - 0.64) / 0.1);
+    if (t > 0.94) return 0.15 + 0.425 * ((t - 0.94) / 0.06);
+    return 0.15;
+  }
+
+  isNight(): boolean {
+    return this.daylight() < 0.4;
+  }
+
+  raining(): boolean {
+    return this.tick < this.rainUntil;
+  }
+
+  /** Foragers stay in the nest at night, in the rain and through the winter. */
+  shelter(): boolean {
+    return this.isNight() || this.raining() || this.season() === Season.Winter;
+  }
+
+  /** Lowest open cell in the middle of a chamber, or -1 while it is still undug. */
+  chamberFloor(c: Chamber): number {
     const w = this.world;
-    if (!w.inBounds(x, y) || y <= w.surface[x] + 1 || y >= w.height - 2) return false;
-    const ch = this.chambers;
-    for (let k = 0; k < ch.length; k++) {
-      const c = ch[k];
-      const dx = (x - c.x) / c.rx;
-      const dy = (y - c.y) / c.ry;
-      if (dx * dx + dy * dy <= 1) return true;
-      // The tunnel joining this room to the previous one.
-      if (k > 0 && segmentDistance(x, y, ch[k - 1].x, ch[k - 1].y, c.x, c.y) <= 0.75) return true;
-    }
-    return false;
+    const x = Math.round(c.x);
+    let y = Math.round(c.y);
+    if (w.solidAt(x, y)) return -1;
+    while (y < c.y + c.ry + 2 && !w.solidAt(x, y + 1)) y++;
+    return this.walkable(x, y) ? this.idx(x, y) : -1;
+  }
+
+  /** Planned cells dug so far, as a fraction of the active plan. */
+  nestProgress(): number {
+    if (!this.planCells.length) return 1;
+    let open = 0;
+    for (const i of this.planCells) if (!this.world.solidAt(i % this.world.width, Math.floor(i / this.world.width))) open++;
+    return open / this.planCells.length;
   }
 
   /** Can a pellet of dug soil go on top of this column, building the mound beside the entrance? */
   spoilColumn(cx: number): boolean {
     const w = this.world;
-    if (cx < 1 || cx >= w.width - 1 || Math.abs(cx - this.entranceX) < SPOIL_DISTANCE - 3) return false;
+    if (cx < 1 || cx >= w.width - 1 || Math.abs(cx - this.entranceX) < SPOIL_DISTANCE) return false;
     for (let x = cx - 1; x <= cx + 1; x++) if (this.topSolid(x) > w.surface[x]) return false;
-    return w.surface[cx] - this.topSolid(cx) < SPOIL_HEIGHT - 1;
+    return w.surface[cx] - this.topSolid(cx) < SPOIL_HEIGHT;
   }
 
   /** Far enough from the nest to leave a dead ant. */
@@ -462,13 +554,19 @@ export class Simulation {
         a.task[id] = this.pickTask(Caste.Worker, this.age(id));
       }
       // Hunger and old age.
-      if (a.energy[id] > 0) a.energy[id]--;
+      // In winter the colony huddles and burns little energy.
+      const winter = this.season() === Season.Winter;
+      if (a.energy[id] > 0) {
+        if (!winter || this.tick % 4 === 0) a.energy[id]--;
+      }
       else if (this.tick % STARVE_TICKS === 0 && --a.hp[id] <= 0) {
         this.stats.starved++;
         this.killAnt(id);
         return;
       }
-      if (this.age(id) > CASTES[a.caste[id] as Caste].lifespan + (id % 64) * 60) {
+      // Lifespans vary by a few minutes either way, so a generation does not die all at once.
+      const spread = 0.75 + 0.5 * (((id * 2654435761 + a.gen[id] * 40503) >>> 0) % 1000) / 1000;
+      if (this.age(id) > CASTES[a.caste[id] as Caste].lifespan * spread) {
         this.stats.diedOfAge++;
         this.killAnt(id);
         return;
@@ -503,7 +601,7 @@ export class Simulation {
         this.stats.delivered++;
         this.recruit(id);
       }
-    } else if (input.eat && id !== this.player && a.carrying[id] === Item.None && this.colony.food > 0) {
+    } else if (input.eat && id !== this.player && a.carrying[id] !== Item.Food && this.colony.food > 0) {
       // A hungry worker eats from the colony's reserve.
       if (this.homeDist[this.idx(a.x[id], a.y[id])] <= 3) {
         this.colony.food--;
@@ -563,7 +661,7 @@ export class Simulation {
     const options: Array<[number, number]> = [[x + mx, y + my]];
     if (mx && !my) options.push([x + mx, y - 1], [x + mx, y + 1]);
     for (const [nx, ny] of options) {
-      if (!this.canStand(nx, ny) || this.squeezes(x, y, nx, ny)) continue;
+      if (!this.canStand(nx, ny)) continue;
       this.moveAnt(id, nx, ny);
       a.steps[id]++;
       a.cooldown[id] = CASTES[a.caste[id] as Caste].stepTicks + (a.carrying[id] ? 1 : 0);
@@ -589,9 +687,6 @@ export class Simulation {
     this.colony.food -= cost;
     this.layCooldown[id] = LAY_COOLDOWN;
     this.stats.laid++;
-    // Where the queen lays is the heart of the nest.
-    this.colony.nestX = a.x[id];
-    this.colony.nestY = a.y[id];
   }
 
   private digStep(id: number, x: number, y: number): void {
@@ -627,8 +722,9 @@ export class Simulation {
     }
     this.stats.dug++;
     if (id !== this.player) {
-      // The colony's diggers carry each pellet out and build a mound by the entrance.
-      if (this.digDisposal !== DigDisposal.Vanish) a.carrying[id] = Item.Soil;
+      // The colony's diggers carry pellets out to build a mound by the entrance; the rest
+      // is pressed into the walls, as real ants do with much of what they dig.
+      if (this.digDisposal !== DigDisposal.Vanish && this.rng.next() < CARRY_OUT_SHARE) a.carrying[id] = Item.Soil;
       return;
     }
     if (this.digDisposal === DigDisposal.Carry) a.carrying[id] = Item.Soil;
@@ -709,8 +805,10 @@ export class Simulation {
   private depositOnSurface(x: number): void {
     const w = this.world;
     const intact = (cx: number) => cx >= 0 && cx < w.width && this.topSolid(cx) <= w.surface[cx];
+    // Away from both the hole and the nest entrance, so nothing slides back in.
+    const from = Math.abs(x - this.entranceX) < SPOIL_DISTANCE * 2 ? this.entranceX : x;
     for (let d = SPOIL_DISTANCE; d < 120; d++) {
-      for (const cx of [x - d, x + d]) {
+      for (const cx of [from - d, from + d]) {
         if (!intact(cx) || !intact(cx - 1) || !intact(cx + 1)) continue;
         const y = this.topSolid(cx) - 1;
         if (y < 0 || w.surface[cx] - 1 - y >= SPOIL_HEIGHT || !this.free(cx, y)) continue;
@@ -805,8 +903,8 @@ export class Simulation {
   /** Spiders turn up at random, far from the nest, more often as the colony grows. */
   private spawnEnemies(): void {
     const living = this.ants.living;
-    if (living < 3) return;
-    const max = Math.min(6, 1 + Math.floor(living / 8));
+    if (living < 12) return;
+    const max = Math.min(5, Math.floor(living / 15));
     if (this.enemies.living >= max || this.rng.next() >= ENEMY_SPAWN_CHANCE) return;
     const w = this.world;
     for (let tries = 0; tries < 10; tries++) {
@@ -936,20 +1034,39 @@ export class Simulation {
   }
 
   /** Seeds and crumbs turn up at random spots on the surface. */
+  /**
+   * Seeds and dead insects turn up at random spots on the surface, a few
+   * pieces together, so a forager that finds some can bring nestmates back.
+   */
   private spawnFood(): void {
-    if (this.foodOnMap >= MAX_FOOD_ON_MAP || this.rng.next() >= FOOD_SPAWN_CHANCE) return;
+    const chance = FOOD_SPAWN_CHANCE * SEASON_FOOD[this.season()] * (this.raining() ? 0.3 : 1);
+    if (this.foodOnMap >= (MAX_FOOD_ON_MAP * this.world.width) / 100 || this.rng.next() >= chance * 0.3) return;
     const w = this.world;
-    const x = this.rng.int(0, w.width - 1);
-    const y = this.topSolid(x) - 1;
-    if (y < 0 || !this.free(x, y)) return;
-    w.set(x, y, Material.Food);
-    this.foodOnMap++;
-    this.settling.add(w.index(x, y));
+    const x = this.rng.int(2, w.width - 3);
+    const pieces = this.rng.int(2, 6);
+    for (let k = 0; k < pieces; k++) {
+      const cx = x + this.rng.int(-2, 2);
+      const y = this.topSolid(cx) - 1;
+      if (y < 0 || !this.free(cx, y)) continue;
+      w.set(cx, y, Material.Food);
+      this.foodOnMap++;
+      this.settling.add(w.index(cx, y));
+    }
   }
 
-  /** Breadth-first step counts to the nest heart and to the open surface. */
+  /** Breadth-first step counts to the nest heart and to the open surface, and the dig plan. */
   private updateFields(): void {
     const w = this.world;
+    this.activatePlan();
+    // The heart of the nest is the queen's chamber once it is dug; before that, wherever the queen is.
+    const heart = this.chambers.length ? this.chamberFloor(this.chambers[0]) : -1;
+    if (heart >= 0) {
+      this.colony.nestX = heart % w.width;
+      this.colony.nestY = (heart - this.colony.nestX) / w.width;
+    } else if (this.ants.alive[this.player]) {
+      this.colony.nestX = this.ants.x[this.player];
+      this.colony.nestY = this.ants.y[this.player];
+    }
     const home: number[] = [];
     const nest = this.nearestWalkable(this.colony.nestX, this.colony.nestY);
     if (nest >= 0) home.push(nest);
@@ -960,83 +1077,71 @@ export class Simulation {
       if (top > 0 && this.walkable(x, top - 1)) exits.push(this.idx(x, top - 1));
     }
     this.bfs(this.exitDist, exits);
-    this.findEntrance(exits);
-    this.planNest();
+    this.planFrontier();
     this.findNursery();
   }
 
-  /** The exit closest to the nest heart is the main entrance. */
-  private findEntrance(exits: number[]): void {
-    let best = UNREACHABLE;
-    for (const i of exits) {
-      if (this.homeDist[i] < best) {
-        best = this.homeDist[i];
-        this.entranceX = i % this.world.width;
-        this.entranceY = (i - this.entranceX) / this.world.width;
-      }
+  /** The colony plans one more chamber for every few ants. */
+  private activatePlan(): void {
+    const rooms = 2 + Math.floor(this.ants.living / ANTS_PER_ROOM);
+    let count = 0;
+    let seen = 0;
+    while (count < this.plan.length) {
+      if (this.plan[count].room && ++seen > rooms) break;
+      count++;
     }
+    if (count === this.planActive) return;
+    this.planActive = count;
+    this.planCells = rasterizePlan(this.world, this.plan, count, this.planMask);
+    this.chambers = this.plan.slice(0, count).filter((n) => n.room);
   }
 
-  /**
-   * Lays out the nest the workers dig: the queen's chamber at the heart, a
-   * nursery below it, then more rooms joined by sloping tunnels as the colony
-   * grows. Diggers follow `digDist` to the nearest planned wall.
-   */
-  private planNest(): void {
+  /** Diggers follow `digDist` to the nearest planned cell they can reach. */
+  private planFrontier(): void {
     const w = this.world;
-    const { nestX, nestY } = this.colony;
-    const living = this.ants.living;
-    const rooms = Math.min(7, 2 + Math.floor(living / 6));
-    const side = this.options.seed & 1 ? 1 : -1;
-    const ch: Chamber[] = [{ x: nestX, y: nestY, rx: 2.5 + Math.min(3, living / 8), ry: 1.3 }];
-    for (let k = 1; k < rooms; k++) {
-      const x = Math.max(4, Math.min(w.width - 5, nestX + (k % 2 ? side : -side) * (5 + k)));
-      const y = nestY + 4 * k;
-      if (y >= w.height - 4) break;
-      ch.push({ x, y, rx: 3 + (k % 3), ry: 1.3 });
-    }
-    this.chambers = ch;
-
     const sources: number[] = [];
     let left = 0;
-    for (const c of ch) {
-      for (let y = Math.floor(c.y - 2 * c.ry - 6); y <= c.y + c.ry + 1; y++) {
-        for (let x = Math.floor(c.x - c.rx - 20); x <= c.x + c.rx + 20; x++) {
-          if (!w.inBounds(x, y) || !isDiggable(w.get(x, y)) || w.get(x, y) === Material.Food) continue;
-          if (w.get(x, y) === Material.Corpse || !this.inPlan(x, y)) continue;
-          let reachable = false;
-          for (const [dx, dy] of DIRS) {
-            const j = this.idx(x + dx, y + dy);
-            if (w.inBounds(x + dx, y + dy) && this.homeDist[j] !== UNREACHABLE) {
-              reachable = true;
-              sources.push(j);
-            }
-          }
-          if (reachable) left++;
+    for (const i of this.planCells) {
+      const m = w.cells[i] as Material;
+      if (!isDiggable(m) || m === Material.Corpse) continue;
+      const x = i % w.width;
+      const y = (i - x) / w.width;
+      let reachable = false;
+      for (const [dx, dy] of DIRS) {
+        if (!w.inBounds(x + dx, y + dy)) continue;
+        const j = this.idx(x + dx, y + dy);
+        if (this.homeDist[j] !== UNREACHABLE) {
+          reachable = true;
+          sources.push(j);
         }
       }
+      if (reachable) left++;
     }
     this.planLeft = left;
     this.bfs(this.digDist, sources);
   }
 
-  /** The nursery is the second chamber once dug; during an attack the brood goes to the room farthest from it. */
+  /** The nursery is the second chamber once dug; during an attack the brood goes to the room farthest from the fight. */
   private findNursery(): void {
     const { nestX, nestY, alarmX, alarmY } = this.colony;
-    const open = this.chambers.filter((c) => this.walkableNear(c.x, c.y) >= 0);
-    let target = open.length > 1 ? open[1] : { x: nestX, y: nestY };
-    const threat = this.alarmActive() && Math.hypot(alarmX - nestX, alarmY - nestY) < this.nestRadius() + 8;
+    const open: number[] = [];
+    for (const c of this.chambers) {
+      const f = this.chamberFloor(c);
+      if (f >= 0 && this.homeDist[f] !== UNREACHABLE) open.push(f);
+    }
+    let cell = open.length > 1 ? open[1] : this.nearestWalkable(nestX, nestY);
+    const threat = this.alarmActive() && Math.hypot(alarmX - nestX, alarmY - nestY) < this.nestRadius() + 12;
     if (threat && open.length > 1) {
       let far = -1;
-      for (const c of open) {
-        const d = Math.hypot(c.x - alarmX, c.y - alarmY);
+      for (const f of open) {
+        const fx = f % this.world.width;
+        const d = Math.hypot(fx - alarmX, (f - fx) / this.world.width - alarmY);
         if (d > far) {
           far = d;
-          target = c;
+          cell = f;
         }
       }
     }
-    const cell = this.walkableNear(target.x, target.y);
     if (cell < 0) {
       this.nurseryDist.fill(UNREACHABLE);
       return;
@@ -1044,19 +1149,6 @@ export class Simulation {
     this.nurseryX = cell % this.world.width;
     this.nurseryY = (cell - this.nurseryX) / this.world.width;
     this.bfs(this.nurseryDist, [cell]);
-  }
-
-  private walkableNear(x: number, y: number): number {
-    const cx = Math.round(x);
-    const cy = Math.round(y);
-    for (let r = 0; r <= 1; r++) {
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          if (this.walkable(cx + dx, cy + dy)) return this.idx(cx + dx, cy + dy);
-        }
-      }
-    }
-    return -1;
   }
 
   private nearestWalkable(x: number, y: number): number {
@@ -1088,7 +1180,7 @@ export class Simulation {
       for (const [dx, dy] of DIRS) {
         const nx = x + dx;
         const ny = y + dy;
-        if (!this.walkable(nx, ny) || this.squeezes(x, y, nx, ny)) continue;
+        if (!this.walkable(nx, ny)) continue;
         const j = this.idx(nx, ny);
         if (field[j] <= d) continue;
         field[j] = d;
@@ -1160,14 +1252,4 @@ export class Simulation {
     mix(this.tick);
     return h >>> 0;
   }
-}
-
-
-/** Distance from point (px, py) to the segment (ax, ay)-(bx, by). */
-function segmentDistance(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
-  const vx = bx - ax;
-  const vy = by - ay;
-  const len = vx * vx + vy * vy;
-  const t = len ? Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / len)) : 0;
-  return Math.hypot(px - ax - t * vx, py - ay - t * vy);
 }

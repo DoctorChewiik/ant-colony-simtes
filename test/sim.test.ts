@@ -382,7 +382,7 @@ describe('colony life', () => {
     expect(sim.colony.food).toBe(food - 1);
     sim.colony.food = 0;
     sim.ants.energy[ant] = 0;
-    run(sim, IDLE, 90 * 12);
+    run(sim, IDLE, 300 * 11);
     expect(sim.ants.alive[ant]).toBe(0);
     expect(sim.stats.starved).toBe(1);
   });
