@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CASTES, Caste, IDLE, Material, Simulation } from '../src/core';
+import { CASTES, Caste, IDLE, Material, Simulation, thinkQueen } from '../src/core';
 
 const opts = { seed: 42, width: 120, height: 80 };
 
@@ -124,4 +124,15 @@ describe('the hand', () => {
     const sim = new Simulation(opts);
     expect(sim.grab(10, opts.height - 1)).toBe(null);
   });
+});
+
+describe('specialisation', () => {
+  it('workers that keep a job get quicker to take it up again', () => {
+    const sim = new Simulation({ seed: 1234, width: 400, height: 260 });
+    for (let t = 0; t < 30 * 60 * 12; t++) sim.step(thinkQueen(sim));
+    const sp = sim.specialists();
+    // Experience splits the workforce: most workers end up specialised, in more than one job.
+    expect(sp.forage + sp.dig + sp.nurse).toBeGreaterThan(sp.generalist);
+    expect([sp.forage, sp.dig, sp.nurse].filter((n) => n > 0).length).toBeGreaterThanOrEqual(2);
+  }, 120000);
 });

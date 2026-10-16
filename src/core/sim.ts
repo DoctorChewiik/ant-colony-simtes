@@ -1,5 +1,5 @@
 import { UNREACHABLE, thinkAnt } from './ai';
-import { Ants, CASTES, Caste, ENERGY_MAX, Item, Task } from './ants';
+import { Ants, CASTES, Caste, ENERGY_MAX, HUNGRY, Item, JOBS, SPECIALIST, Task } from './ants';
 import { Brood, STAGE_TICKS, Stage } from './brood';
 import { ENEMIES, Enemies, EnemyKind } from './enemies';
 import type { AntInput } from './input';
@@ -55,6 +55,11 @@ export const LARVA_MEAL = 150;
 const STARVE_TICKS = 300;
 /** A fully submerged ant loses one hit point this often. Ants hold their breath a while. */
 const DROWN_TICKS = 45;
+/** How much a job's threshold drops each time a worker keeps at it, and creeps back up when it does not. */
+const LEARN = 0.1;
+const FORGET = 0.03;
+/** Extra drop for a job well done: food brought home, a larva fed, a cell dug. */
+const REWARD: Record<number, number> = { [Task.Forage]: 0.04, [Task.Dig]: 0.006, [Task.Nurse]: 0.03 };
 /** An ant can drop this many cells unhurt; every further two cells cost one hit point. */
 export const SAFE_FALL = 6;
 /** Damage a falling block does to each ant it lands on. */
@@ -138,6 +143,7 @@ export interface SimStats {
   drowned: number;
   /** Ants killed by a fall. */
   fell: number;
+  broodDrowned: number;
 }
 
 export interface Colony {
@@ -190,6 +196,7 @@ export class Simulation {
     starved: 0,
     drowned: 0,
     fell: 0,
+    broodDrowned: 0,
   };
   readonly colony: Colony;
   digDisposal = DigDisposal.Surface;
@@ -332,6 +339,12 @@ export class Simulation {
   /** Open cell something can cling to, ignoring who stands there. */
   walkable(x: number, y: number): boolean {
     return this.world.inBounds(x, y) && !this.world.solidAt(x, y) && this.hasGrip(x, y);
+  }
+
+  /** Under water with no air just above: an ant here cannot breathe. */
+  deepWater(x: number, y: number): boolean {
+    const w = this.world;
+    return w.get(x, y) === Material.Water && w.get(x, y - 1) !== Material.Air;
   }
 
   /** Can an ant step here: walkable, not crowded, no enemy on it. */
@@ -494,7 +507,9 @@ export class Simulation {
     this.layCooldown[id] = 0;
     this.fallFrom[id] = -1;
     this.ants.born[id] = this.tick;
-    this.ants.task[id] = this.pickTask(caste, 0);
+    // Every worker is born a little different: some are quicker to forage, others to dig or nurse.
+    for (let k = 0; k < JOBS.length; k++) this.ants.threshold[id * JOBS.length + k] = 0.3 + 0.6 * this.rng.next();
+    this.ants.task[id] = this.pickTask(caste, 0, id);
     return id;
   }
 
@@ -503,23 +518,92 @@ export class Simulation {
    * the brood, middle-aged ones dig, and old ones go out to forage; what the
    * colony lacks (food, brood care, room) shifts the odds.
    */
-  pickTask(caste: Caste, age: number): Task {
+  pickTask(caste: Caste, age: number, id = -1): Task {
     if (caste === Caste.Soldier) return Task.Guard;
     if (caste !== Caste.Worker) return Task.Idle;
-    let nurse: number;
-    let dig: number;
-    let forage: number;
-    if (age < YOUNG_AGE) [nurse, dig, forage] = [0.65, 0.25, 0.1];
-    else if (age < ADULT_AGE) [nurse, dig, forage] = [0.15, 0.45, 0.4];
-    else [nurse, dig, forage] = [0.05, 0.15, 0.8];
-    const workers = Math.max(1, this.ants.living);
-    if (this.colony.food < 2 + workers / 2) forage *= 2.5;
-    if (this.brood.count === 0) nurse *= 0.15;
-    if (this.planLeft === 0) dig *= 0.1;
-    const r = this.rng.next() * (nurse + dig + forage);
-    if (r < forage) return Task.Forage;
-    if (r < forage + dig) return Task.Dig;
-    return Task.Nurse;
+    // Age still sways the choice: the young stay with the brood, the old go out.
+    const bias =
+      age < YOUNG_AGE ? [0.4, 0.8, 2.2] : age < ADULT_AGE ? [1, 1.4, 0.6] : [2, 0.7, 0.3];
+    const need = this.needs();
+    const a = this.ants;
+    const current = id >= 0 ? a.task[id] : -1;
+    const weights = JOBS.map((job, k) => {
+      // Response threshold: the stronger the need compared with this ant's threshold, the likelier.
+      const th = id >= 0 ? a.threshold[id * JOBS.length + k] : 0.5;
+      const sq = need[k] * need[k];
+      let w = (sq / (sq + th * th + 1e-6)) * bias[k] * (job === current ? 1.4 : 1);
+      // An ant that is hungry itself, with nothing in the store, goes looking for food.
+      if (job === Task.Forage && id >= 0 && a.energy[id] < HUNGRY && this.colony.food === 0) w *= 4;
+      return w;
+    });
+    let r = this.rng.next() * weights.reduce((p, q) => p + q, 0);
+    for (let k = 0; k < JOBS.length; k++) {
+      r -= weights[k];
+      if (r <= 0) return JOBS[k];
+    }
+    return JOBS[JOBS.length - 1];
+  }
+
+  private needTick = -1;
+  private needCache = [0, 0, 0];
+
+  /**
+   * How badly the colony needs each job right now, from 0 to 1: food when the
+   * reserve runs low, digging while the planned nest is unfinished, nursing
+   * when there is more brood (and hungry larvae) than nurses to tend it.
+   */
+  needs(): number[] {
+    if (this.needTick === this.tick) return this.needCache;
+    const a = this.ants;
+    let workers = 0;
+    let nurses = 0;
+    for (let i = 0; i < a.count; i++) {
+      if (!a.alive[i] || a.caste[i] !== Caste.Worker) continue;
+      workers++;
+      if (a.task[i] === Task.Nurse) nurses++;
+    }
+    const b = this.brood;
+    let hungry = 0;
+    for (let i = 0; i < b.count; i++) if (b.stage[i] === Stage.Larva && b.fed[i] === 0) hungry++;
+    const target = 6 + workers * 1.5;
+    const shortage = Math.max(0, Math.min(1, (target - this.colony.food) / target));
+    let forage = 0.1 + 0.9 * shortage;
+    // Bad weather keeps foragers in, unless the colony is starving.
+    if (this.shelter()) forage *= 0.4 + 0.6 * shortage * shortage;
+    let dig = this.planLeft > 0 ? 0.25 + 0.65 * (1 - this.nestProgress()) : 0.03;
+    // Hungry colonies put building aside to look for food.
+    if (this.colony.food < workers / 2) dig *= 0.4;
+    const nurse = b.count === 0 ? 0.05 : Math.max(0.15, Math.min(1, (b.count + 2 * hungry) / (3 * (nurses + 1))));
+    this.needCache = [forage, dig, nurse];
+    this.needTick = this.tick;
+    return this.needCache;
+  }
+
+  /** A worker that keeps a job gets better at it (lower threshold) and loses the habit of the others. */
+  private practise(id: number, job: Task, amount = LEARN): void {
+    if (this.ants.caste[id] !== Caste.Worker || id === this.player) return;
+    const t = this.ants.threshold;
+    for (let k = 0; k < JOBS.length; k++) {
+      const j = id * JOBS.length + k;
+      t[j] = JOBS[k] === job ? Math.max(0.02, t[j] - amount) : Math.min(1, t[j] + (amount === LEARN ? FORGET : 0));
+    }
+  }
+
+  /** How many workers specialise in each job, and how many are generalists. */
+  specialists(): { forage: number; dig: number; nurse: number; generalist: number } {
+    const a = this.ants;
+    const out = { forage: 0, dig: 0, nurse: 0, generalist: 0 };
+    for (let i = 0; i < a.count; i++) {
+      if (!a.alive[i] || a.caste[i] !== Caste.Worker || i === this.player) continue;
+      const base = i * JOBS.length;
+      let best = 0;
+      for (let k = 1; k < JOBS.length; k++) if (a.threshold[base + k] < a.threshold[base + best]) best = k;
+      if (a.threshold[base + best] >= SPECIALIST) out.generalist++;
+      else if (JOBS[best] === Task.Forage) out.forage++;
+      else if (JOBS[best] === Task.Dig) out.dig++;
+      else out.nurse++;
+    }
+    return out;
   }
 
   private moveAnt(id: number, nx: number, ny: number): void {
@@ -581,7 +665,8 @@ export class Simulation {
     }
     if (id !== this.player) {
       if (this.tick % RETASK_TICKS === id % RETASK_TICKS && a.caste[id] === Caste.Worker) {
-        a.task[id] = this.pickTask(Caste.Worker, this.age(id));
+        this.practise(id, a.task[id] as Task);
+        a.task[id] = this.pickTask(Caste.Worker, this.age(id), id);
       }
       // Hunger and old age.
       // In winter the colony huddles and burns little energy.
@@ -614,7 +699,7 @@ export class Simulation {
       const x = a.x[id];
       const y = a.y[id];
       const above = w.get(x, y - 1);
-      if (above === Material.Water && this.tick % DROWN_TICKS === id % DROWN_TICKS && --a.hp[id] <= 0) {
+      if (above !== Material.Air && this.tick % DROWN_TICKS === id % DROWN_TICKS && --a.hp[id] <= 0) {
         this.stats.drowned++;
         this.killAnt(id);
         return;
@@ -662,6 +747,7 @@ export class Simulation {
       if (id === this.player) this.stats.eaten++;
       else {
         this.stats.delivered++;
+        this.practise(id, Task.Forage, REWARD[Task.Forage]);
         this.recruit(id);
       }
     } else if (input.eat && id !== this.player && a.carrying[id] !== Item.Food && this.colony.food > 0) {
@@ -765,7 +851,9 @@ export class Simulation {
       a.digTarget[id] = target;
       a.digProgress[id] = 0;
     }
-    a.digProgress[id]++;
+    // Practised diggers work a third faster.
+    const skilled = id !== this.player && a.threshold[id * JOBS.length + 1] < SPECIALIST && this.tick % 3 === 0;
+    a.digProgress[id] += skilled ? 2 : 1;
     if (a.digProgress[id] < MATERIALS[m].digTicks) return;
 
     w.set(x, y, Material.Air);
@@ -785,6 +873,7 @@ export class Simulation {
     }
     this.stats.dug++;
     if (id !== this.player) {
+      this.practise(id, Task.Dig, REWARD[Task.Dig]);
       // The colony's diggers carry pellets out to build a mound by the entrance; the rest
       // is pressed into the walls, as real ants do with much of what they dig.
       if (this.digDisposal !== DigDisposal.Vanish && this.rng.next() < CARRY_OUT_SHARE) a.carrying[id] = Item.Soil;
@@ -802,6 +891,7 @@ export class Simulation {
     if (b.stage[i] === Stage.Larva && b.fed[i] === 0) {
       b.fed[i] = LARVA_MEAL;
       this.stats.larvaeFed++;
+      this.practise(id, Task.Nurse, REWARD[Task.Nurse]);
       return;
     }
     const a = this.ants;
@@ -917,6 +1007,13 @@ export class Simulation {
         this.broodGrid[this.idx(b.x[i], b.y[i])] = 0;
         b.y[i] = below;
         this.broodGrid[this.idx(b.x[i], b.y[i])] = i + 1;
+      }
+
+      // Brood left under water drowns after a while, unless a nurse rescues it.
+      if (this.deepWater(b.x[i], b.y[i]) && this.rng.next() < 1 / 900) {
+        this.removeBrood(i);
+        this.stats.broodDrowned++;
+        continue;
       }
 
       const stage = b.stage[i] as Stage;
@@ -1266,7 +1363,8 @@ export class Simulation {
     for (let k = 0; k < pieces; k++) {
       const cx = x + this.rng.int(-2, 2);
       const y = this.topSolid(cx) - 1;
-      if (y < 0 || !this.free(cx, y)) continue;
+      // Only on open ground: never down the entrance hole, where it would plug the nest.
+      if (y < 0 || y > w.surface[cx] + 1 || Math.abs(cx - this.entranceX) < 4 || !this.free(cx, y)) continue;
       w.set(cx, y, Material.Food);
       this.foodOnMap++;
       this.settling.add(w.index(cx, y));
@@ -1346,7 +1444,8 @@ export class Simulation {
     const open: number[] = [];
     for (const c of this.chambers) {
       const f = this.chamberFloor(c);
-      if (f >= 0 && this.homeDist[f] !== UNREACHABLE) open.push(f);
+      // A flooded chamber is no place for the brood.
+      if (f >= 0 && this.homeDist[f] !== UNREACHABLE && this.world.cells[f] !== Material.Water) open.push(f);
     }
     let cell = open.length > 1 ? open[1] : this.nearestWalkable(nestX, nestY);
     const threat = this.alarmActive() && Math.hypot(alarmX - nestX, alarmY - nestY) < this.nestRadius() + 12;
@@ -1399,7 +1498,7 @@ export class Simulation {
       for (const [dx, dy] of DIRS) {
         const nx = x + dx;
         const ny = y + dy;
-        if (!this.walkable(nx, ny)) continue;
+        if (!this.walkable(nx, ny) || this.deepWater(nx, ny)) continue;
         const j = this.idx(nx, ny);
         if (field[j] <= d) continue;
         field[j] = d;

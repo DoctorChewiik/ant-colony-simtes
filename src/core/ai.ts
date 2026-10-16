@@ -1,4 +1,4 @@
-import { CASTES, Caste, HUNGRY, Item, Task } from './ants';
+import { CASTES, Caste, HUNGRY, Item, JOBS, SPECIALIST, Task } from './ants';
 import { Stage } from './brood';
 import { IDLE, type AntInput, type Axis } from './input';
 import { Material, isDiggable } from './materials';
@@ -55,13 +55,35 @@ function chebyshev(ax: number, ay: number, bx: number, by: number): number {
   return Math.max(Math.abs(ax - bx), Math.abs(ay - by));
 }
 
-/** Cells next to the ant it could step onto. */
+/** Cells next to the ant it could step onto. Ants keep out of water too deep to breathe in. */
 function steps(sim: Simulation, x: number, y: number): Array<[number, number]> {
   const out: Array<[number, number]> = [];
+  const diving = sim.deepWater(x, y);
   for (const [dx, dy] of DIRS) {
-    if (sim.canStand(x + dx, y + dy)) out.push([dx, dy]);
+    if (sim.canStand(x + dx, y + dy) && (diving || !sim.deepWater(x + dx, y + dy))) out.push([dx, dy]);
   }
   return out;
+}
+
+/** True if this worker has become a specialist of `job`. */
+function expert(sim: Simulation, id: number, job: Task): boolean {
+  return sim.ants.threshold[id * JOBS.length + JOBS.indexOf(job as (typeof JOBS)[number])] < SPECIALIST;
+}
+
+/** Under water: swim up, or sideways towards air, whatever the ant was doing. */
+function swim(sim: Simulation, id: number): AntInput {
+  const x = sim.ants.x[id];
+  const y = sim.ants.y[id];
+  let best: [number, number] | null = null;
+  let bestScore = -Infinity;
+  for (const [dx, dy] of steps(sim, x, y)) {
+    const score = (sim.deepWater(x + dx, y + dy) ? 0 : 10) - dy * 2 + sim.rng.next();
+    if (score > bestScore) {
+      bestScore = score;
+      best = [dx, dy];
+    }
+  }
+  return best ? move(best[0], best[1]) : move(0, -1);
 }
 
 /** Picks a step, keeping the current heading most of the time so paths look purposeful. */
@@ -182,6 +204,9 @@ export function thinkAnt(sim: Simulation, id: number): AntInput {
   const handsFree = carrying === Item.None || carrying === Item.Soil;
   const fighter = caste === Caste.Soldier || (caste === Caste.Worker && handsFree);
 
+  // Out of breath: get to the air first.
+  if (sim.deepWater(x, y)) return swim(sim, id);
+
   // Bite an enemy within reach.
   if (fighter) {
     for (const [dx, dy] of DIRS) {
@@ -287,6 +312,8 @@ function forage(sim: Simulation, id: number): AntInput {
     if (chebyshev(x, y, food[0], food[1]) === 1) return act(food[0], food[1]);
     return toward(sim, id, food[0], food[1]);
   }
+  // Shut in (a fall of earth, a seed rolled into the shaft): dig the way out.
+  if (sim.exitDist[sim.idx(x, y)] === UNREACHABLE) return dig(sim, id);
   if (!out) return sim.rng.next() < 0.9 ? follow(sim, id, sim.exitDist) : wander(sim, id);
 
   // Go back to the last place food was found; give up once there and it is gone.
@@ -300,6 +327,7 @@ function forage(sim: Simulation, id: number): AntInput {
   }
 
   // Search: climb food trails towards their source, keep a heading, drift away from home.
+  const veteran = expert(sim, id, Task.Forage);
   const options = steps(sim, x, y);
   if (!options.length) return IDLE;
   const trailHere = sim.trail[sim.idx(x, y)];
@@ -309,7 +337,8 @@ function forage(sim: Simulation, id: number): AntInput {
     const i = sim.idx(x + dx, y + dy);
     let w = 1 + 10 * sim.trail[i] + 80 * Math.max(0, sim.trail[i] - trailHere);
     if (dx === a.aimX[id] && dy === a.aimY[id]) w += 10;
-    if (sim.homeDist[i] > homeHere) w += 1;
+    // Seasoned foragers range far; beginners keep near the nest.
+    if (sim.homeDist[i] > homeHere) w += veteran ? 2 : homeHere > 40 ? -0.5 : 1;
     total += w;
     return w;
   });
@@ -402,7 +431,7 @@ function carryBrood(sim: Simulation, id: number): AntInput {
     for (const [dx, dy] of [[0, 0], ...DIRS] as Array<readonly [number, number]>) {
       const cx = x + dx;
       const cy = y + dy;
-      if (!sim.walkable(cx, cy) || !w.solidAt(cx, cy + 1) || sim.broodAt(cx, cy)) continue;
+      if (!sim.walkable(cx, cy) || !w.solidAt(cx, cy + 1) || sim.broodAt(cx, cy) || w.get(cx, cy) === Material.Water) continue;
       if (field[sim.idx(cx, cy)] > NURSERY_SPREAD) continue;
       return drop(cx, cy);
     }
@@ -429,12 +458,19 @@ function nurse(sim: Simulation, id: number): AntInput {
   const y = a.y[id];
   let hungry = -1;
   let stray = -1;
+  let wet = -1;
   let hungryDist = 1e9;
   let strayDist = 1e9;
+  let wetDist = 1e9;
   for (let i = 0; i < b.count; i++) {
     const bi = sim.idx(b.x[i], b.y[i]);
-    if (sim.homeDist[bi] === UNREACHABLE && sim.nurseryDist[bi] === UNREACHABLE) continue;
     const d = chebyshev(x, y, b.x[i], b.y[i]);
+    // Brood in water is rescued first, if a nurse can get close enough to grab it.
+    if (sim.world.cells[bi] === Material.Water && d < wetDist && (d <= 1 || sim.homeDist[bi] !== UNREACHABLE || reachable(sim, b.x[i], b.y[i]))) {
+      wetDist = d;
+      wet = i;
+    }
+    if (sim.homeDist[bi] === UNREACHABLE && sim.nurseryDist[bi] === UNREACHABLE) continue;
     if (b.stage[i] === Stage.Larva && b.fed[i] === 0 && d < hungryDist) {
       hungryDist = d;
       hungry = i;
@@ -444,7 +480,7 @@ function nurse(sim: Simulation, id: number): AntInput {
       stray = i;
     }
   }
-  const job = hungry >= 0 ? hungry : stray;
+  const job = wet >= 0 ? wet : hungry >= 0 ? hungry : stray;
   if (job >= 0) {
     if (chebyshev(x, y, b.x[job], b.y[job]) <= 1) return act(b.x[job], b.y[job]);
     return approach(sim, id, b.x[job], b.y[job]);
@@ -565,8 +601,9 @@ function chooseEgg(sim: Simulation): Caste | null {
     else if (a.caste[i] === Caste.Soldier) soldiers++;
   }
   // Enough brood for the nurses to raise, and food left over for the adults.
-  if (sim.brood.count >= Math.max(5, workers * 0.6)) return null;
-  const keep = Math.max(2, Math.floor(workers / 2));
+  if (sim.brood.count >= Math.max(5, workers * 0.4)) return null;
+  // Lay only with a meal in store for every worker, so the colony does not outgrow its food.
+  const keep = Math.max(2, workers);
   let caste = Caste.Worker;
   const r = sim.rng.next();
   const breeding = workers >= 30 && (sim.season() === Season.Spring || sim.season() === Season.Summer);

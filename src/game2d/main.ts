@@ -291,6 +291,11 @@ async function start() {
     updateHud();
   });
 
+  function specialistLine(): string {
+    const sp = sim.specialists();
+    return `Spécialistes : ${sp.forage} fourrageuses · ${sp.dig} terrassières · ${sp.nurse} nourrices · ${sp.generalist} polyvalentes`;
+  }
+
   function updateHud() {
     const a = sim.ants;
     const p = sim.player;
@@ -337,6 +342,7 @@ async function start() {
           `<b>Réserve de nourriture : ${sim.colony.food}</b>`,
           `${castes[Caste.Worker]} ouvrières · ${castes[Caste.Soldier]} soldats · ${castes[Caste.Queen]} reines ailées · ${castes[Caste.Male]} mâles`,
           `Ouvrières : ${tasks[Task.Nurse]} nourrices · ${tasks[Task.Dig]} terrassières · ${tasks[Task.Forage]} fourrageuses`,
+          specialistLine(),
           `Couvain : ${stages[Stage.Egg]} œufs · ${stages[Stage.Larva]} larves · ${stages[Stage.Pupa]} nymphes`,
           `Nid : ${sim.chambers.filter((c) => sim.chamberFloor(c) >= 0).length}/${sim.chambers.length} chambres · ${sim.plan.filter((n) => n.room).length} prévues au total`,
           `Morts : ${s.antsLost} (${s.buried} au cimetière, ${s.starved} de faim, ${s.diedOfAge} de vieillesse, ${s.drowned} noyées, ${s.fell} de chute) · Envolés : ${s.flown}`,

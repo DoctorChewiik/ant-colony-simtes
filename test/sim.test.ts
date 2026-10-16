@@ -380,9 +380,12 @@ describe('colony life', () => {
     run(sim, IDLE, 40);
     expect(sim.stats.meals).toBe(1);
     expect(sim.colony.food).toBe(food - 1);
-    sim.colony.food = 0;
     sim.ants.energy[ant] = 0;
-    run(sim, IDLE, 300 * 11);
+    // Keep the store empty, even if a forager brings something home.
+    for (let t = 0; t < 300 * 11; t++) {
+      sim.colony.food = 0;
+      sim.step(IDLE);
+    }
     expect(sim.ants.alive[ant]).toBe(0);
     expect(sim.stats.starved).toBe(1);
   });

@@ -26,6 +26,11 @@ export enum Task {
   Guard = 4,
 }
 
+/** The jobs a worker can specialise in, in the order of `Ants.threshold`. */
+export const JOBS = [Task.Forage, Task.Dig, Task.Nurse] as const;
+/** Below this threshold a worker counts as a specialist of that job. */
+export const SPECIALIST = 0.2;
+
 /** A full ant can work this many ticks (eight minutes) before it needs to eat. */
 export const ENERGY_MAX = 30 * 60 * 8;
 /** Below this an ant stops work and goes home to eat. */
@@ -95,6 +100,12 @@ export class Ants {
   readonly broodAge: Uint16Array;
   /** 1 while a winged queen or male is flying off on its nuptial flight. */
   readonly flying: Uint8Array;
+  /**
+   * Each worker's response threshold for every job (see JOBS), from 0 to 1.
+   * A low threshold means the ant takes up that job at the slightest need;
+   * doing a job lowers its threshold, so ants specialise by experience.
+   */
+  readonly threshold: Float32Array;
 
   constructor(readonly capacity: number) {
     this.alive = new Uint8Array(capacity);
@@ -122,6 +133,7 @@ export class Ants {
     this.broodStage = new Uint8Array(capacity);
     this.broodAge = new Uint16Array(capacity);
     this.flying = new Uint8Array(capacity);
+    this.threshold = new Float32Array(capacity * JOBS.length);
   }
 
   /** Number of living ants. */
